@@ -42,7 +42,7 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-004 snapshots | **применён** (canonical bytes, hash, JSONB projection, immutability) |
 | AUDIT-005 events/outbox | **применён** (Rust columns, append-only events, delivery timestamp) |
 | AUDIT-006 tenant RLS | **применён** (ENABLE/FORCE, actual-table isolation tests, pre-auth exception) |
-| AUDIT-007 ObjectVersion / object lifecycle | **применён** (строгие переходы статусов и неизменяемая identity) |
+| AUDIT-007 ObjectVersion / object lifecycle | **PR #7** (строгие переходы статусов и неизменяемая identity; ожидает ревью) |
 | AUDIT-008 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
