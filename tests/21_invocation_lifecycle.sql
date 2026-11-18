@@ -55,6 +55,11 @@ SELECT tt.try('AUDIT-009 expire old lease for reclaim fixture', 'ok', $q$
   UPDATE object_invocations SET lease_until=now()-interval '1 second'
    WHERE id='1a000000-0000-0000-0000-000000000001'
 $q$);
+SELECT tt.try('AUDIT-009 expired lease cannot be renewed without fencing', 'err', $q$
+  UPDATE object_invocations
+     SET lease_until=now()+interval '1 minute', heartbeat_at=now()
+   WHERE id='1a000000-0000-0000-0000-000000000001'
+$q$);
 SELECT tt.try('AUDIT-009 reclaim advances fencing token and version', 'ok', $q$
   UPDATE object_invocations
      SET fencing_token=1, version=version+1,
