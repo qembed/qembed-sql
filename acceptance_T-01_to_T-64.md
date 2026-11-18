@@ -104,11 +104,11 @@ Crash points: (1) после execution claim до connect; (2) после отп
 |---|---|
 | T-01/T-49 | без `app.tenant_id` — 0 строк; tenant B не видит A |
 | T-09 | UPDATE/DELETE append-only отклонены (permission denied / trigger) |
-| T-36/T-51 | dispatcher читает `outbox`; `callers`, `interaction_messages` — denied |
+| T-36/T-51 | dispatcher читает `outbox_messages`; `callers`, `interaction_messages` — denied |
 | T-47 (binding, DB часть) | `binding_version` монотонна; DELETE binding запрещён |
 | T-54/T-57 | runtime не делает `SET ROLE qembed_definer` и не вызывает `retention_purge`; definer-функции принадлежат `qembed_definer`, `PUBLIC EXECUTE` отозван, членств нет |
 | T-60 | UPDATE candidate→Verified отклонён; Owner-строка (TenantOwner) принята; TenantAdmin отклонён; verified immutable |
-| T-61 | `retention_purge('object_events')` → `table not allowed` |
+| T-61 | `retention_purge('events')` → `table not allowed` |
 | T-63 (DB часть) | неверный хэш и расхождение JSONB-проекций отклоняются; Rust-JCS не проверялся |
 
 Не выполнено: PG15, pgvector ≥0.8, остальные тесты, failure-injection matrix, конкурентность.

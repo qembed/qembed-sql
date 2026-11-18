@@ -12,7 +12,7 @@
 **Гейт.** T-45, T-46, T-58, T-59. DB trigger — дополнительный guard, не замена CAS-операциям репозитория.
 
 ## RT-041 — Monotonic binding version
-**Решение.** `qembed_objects.binding_counter` — монотонный счётчик на объект. Любое изменение tool version, permissions, enabled или scope атомарно увеличивает counter и присваивает новое `binding_version`. Физический DELETE/TRUNCATE binding запрещён; отключение — soft-disable.
+**Решение.** `objects.binding_counter` — монотонный счётчик на объект. Любое изменение tool version, permissions, enabled или scope атомарно увеличивает counter и присваивает новое `binding_version`. Физический DELETE/TRUNCATE binding запрещён; отключение — soft-disable.
 **Гейт.** T-47.
 
 ## RT-042 — Definer role
@@ -29,7 +29,7 @@
 **Гейт.** T-04 и T-60.
 
 ## RT-045 — Retention vs append-only
-**Решение.** Обычный `retention_purge` не удаляет `object_events`, `policy_decisions`, `runtime_snapshots`. Удаление TTL-данных выполняется whitelist-функцией с записью retention_log.
+**Решение.** Обычный `retention_purge` не удаляет `events`, `policy_decisions`, `snapshots`. Удаление TTL-данных выполняется whitelist-функцией с записью retention_log.
 **Гейт.** T-09, T-61.
 
 ## RT-046 — Tenant offboarding and erasure
