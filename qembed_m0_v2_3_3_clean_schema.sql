@@ -372,7 +372,7 @@ CREATE TABLE object_invocations (
   lease_owner TEXT, lease_until TIMESTAMPTZ, heartbeat_at TIMESTAMPTZ,
   fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ,
-  version BIGINT NOT NULL DEFAULT 0,
+  version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
   CHECK ((status IN ('Completed','CompletedDegraded','Failed','Cancelled')) = (finished_at IS NOT NULL)),
   CHECK (status <> 'Failed' OR error_code IS NOT NULL),
   CHECK (status <> 'CompletedDegraded' OR degraded_reason IS NOT NULL),
@@ -467,6 +467,13 @@ BEGIN
         AND OLD.lease_until > now()
         AND NEW.lease_owner IS DISTINCT FROM OLD.lease_owner THEN
     RAISE EXCEPTION 'an active invocation lease cannot be stolen'
+      USING ERRCODE = '40001';
+  ELSIF OLD.lease_owner IS NOT NULL
+        AND OLD.lease_until <= now()
+        AND (NEW.lease_owner, NEW.lease_until)
+              IS DISTINCT FROM (OLD.lease_owner, OLD.lease_until)
+        AND NOT (status_changed AND NEW.status IN ('Completed','CompletedDegraded','Failed','Cancelled')) THEN
+    RAISE EXCEPTION 'an expired invocation lease must be reclaimed with a newer fencing token'
       USING ERRCODE = '40001';
   END IF;
 
