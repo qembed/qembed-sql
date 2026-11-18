@@ -264,6 +264,18 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
 
+  IF NEW.published_version_id IS DISTINCT FROM OLD.published_version_id
+     AND NOT (
+       (OLD.state = 'validating' AND NEW.state = 'active'
+        AND OLD.published_version_id IS NULL AND NEW.published_version_id IS NOT NULL)
+       OR (OLD.state IN ('active', 'suspended')
+           AND NEW.state = OLD.state
+           AND NEW.published_version_id IS NOT NULL)
+     ) THEN
+    RAISE EXCEPTION 'published version pointer may change only during activation or active replacement'
+      USING ERRCODE = '23514';
+  END IF;
+
   RETURN NEW;
 END
 $object_state_guard$;
