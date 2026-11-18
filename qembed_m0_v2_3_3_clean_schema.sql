@@ -4,8 +4,8 @@
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
--- Rust-compat remediation: AUDIT-001 applied (physical names/keys of objects, object_versions,
--- snapshots, events, outbox_messages follow the Rust migrations). AUDIT-002..010 are separate patches.
+-- Rust-compat remediation: AUDIT-001..003 applied (physical contracts, owner auth, object state/drafts).
+-- AUDIT-004..010 are separate patches.
 -- =============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -234,19 +234,16 @@ CREATE TABLE callers (
 -- -----------------------------------------------------------------------------
 -- 6. Snapshots (A4): canonical_json is the source of truth for the hash
 -- -----------------------------------------------------------------------------
--- AUDIT-001: name/keys follow Rust migration 20261118000002_snapshots.sql. The r3 projection
--- columns below are reworked in AUDIT-004.
+-- AUDIT-001: name/keys follow Rust migration 20261118000002_snapshots.sql. AUDIT-004 aligns
+-- canonical bytes, SHA-256 digest, JSONB projection, and immutability.
 CREATE TABLE snapshots (
   tenant_id UUID NOT NULL, snapshot_id UUID NOT NULL, object_id UUID NOT NULL,
   object_version_id UUID NOT NULL,
   schema_version INTEGER NOT NULL CHECK (schema_version > 0),
-  canonical_json BYTEA NOT NULL,                       -- RFC 8785 JCS, UTF-8
+  canonical_json BYTEA NOT NULL,
   content_hash BYTEA NOT NULL CHECK (octet_length(content_hash) = 32),
-  config JSONB NOT NULL, capabilities JSONB NOT NULL, tool_bindings JSONB NOT NULL,
-  budget_snapshot JSONB NOT NULL, context_config JSONB NOT NULL,
-  policy_version TEXT NOT NULL,
+  json_projection JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (content_hash = digest(canonical_json, 'sha256')) ,
   PRIMARY KEY (tenant_id, snapshot_id),
   UNIQUE (snapshot_id),
   UNIQUE (tenant_id, object_id, content_hash),
@@ -255,6 +252,31 @@ CREATE TABLE snapshots (
     REFERENCES object_versions(tenant_id, object_id, object_version_id)
     ON DELETE RESTRICT
 );
+
+-- Match the projection against the JSON value represented by the exact source bytes.
+-- JSONB is query-only; it is never used to reconstruct canonical_json.
+CREATE FUNCTION enforce_snapshot_projection() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+BEGIN
+  IF NEW.json_projection IS DISTINCT FROM
+      convert_from(NEW.canonical_json, 'UTF8')::jsonb THEN
+    RAISE EXCEPTION 'snapshot JSONB projection does not match canonical_json'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $;
+CREATE TRIGGER snapshots_projection_guard
+  BEFORE INSERT OR UPDATE ON snapshots
+  FOR EACH ROW EXECUTE FUNCTION enforce_snapshot_projection();
+
+CREATE FUNCTION reject_snapshot_mutation() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+BEGIN
+  RAISE EXCEPTION 'snapshots are immutable' USING ERRCODE = '55000';
+END $;
+CREATE TRIGGER snapshots_immutable
+  BEFORE UPDATE OR DELETE ON snapshots
+  FOR EACH ROW EXECUTE FUNCTION reject_snapshot_mutation();
 
 -- -----------------------------------------------------------------------------
 -- 7. Invocations (lease + fencing), idempotency, messages
