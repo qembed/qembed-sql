@@ -4,8 +4,8 @@
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
--- Rust-compat remediation: AUDIT-001..003 applied (physical contracts, owner auth, object state/drafts).
--- AUDIT-004..010 are separate patches.
+-- Rust-compat remediation: AUDIT-001..004 applied (physical contracts, owner auth, object state/drafts, snapshots).
+-- AUDIT-005..010 are separate patches.
 -- =============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -613,34 +613,48 @@ CREATE INDEX idx_te_lease ON tool_executions (lease_until) WHERE status = 'Execu
 -- -----------------------------------------------------------------------------
 -- 11. Events and outbox_messages (A6: tenant-consistent FK)
 -- -----------------------------------------------------------------------------
--- AUDIT-001: name/keys follow Rust migration 20261118000003_events_outbox.sql. Column set is
--- reworked in AUDIT-005 (aggregate_type/aggregate_id; stream_* become optional extensions).
+-- AUDIT-005: exact physical schema from Rust migration 20261118000003_events_outbox.sql.
 CREATE TABLE events (
-  tenant_id UUID NOT NULL, event_id UUID NOT NULL, object_id UUID NOT NULL,
-  stream_type TEXT NOT NULL CHECK (stream_type IN ('object','invocation','task','knowledge')),
-  stream_id UUID NOT NULL, stream_version BIGINT NOT NULL CHECK (stream_version > 0),
-  event_type TEXT NOT NULL, payload JSONB NOT NULL,
-  pii_class TEXT NOT NULL DEFAULT 'none' CHECK (pii_class = 'none'),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  tenant_id UUID NOT NULL,
+  event_id UUID NOT NULL,
+  aggregate_type TEXT NOT NULL,
+  aggregate_id UUID NOT NULL,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, event_id),
-  UNIQUE (event_id),
-  UNIQUE (tenant_id, stream_type, stream_id, stream_version),
-  FOREIGN KEY (tenant_id, object_id) REFERENCES objects(tenant_id, object_id)
+  UNIQUE (event_id)
 );
-CREATE INDEX idx_events_object_time ON events (tenant_id, object_id, created_at);
+CREATE INDEX events_aggregate_order_idx
+  ON events (tenant_id, aggregate_type, aggregate_id, occurred_at, event_id);
+
+CREATE FUNCTION reject_event_mutation() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $event_append_only$
+BEGIN
+  RAISE EXCEPTION 'events are append-only'
+    USING ERRCODE = '55000';
+END $event_append_only$;
+CREATE TRIGGER events_append_only
+  BEFORE UPDATE OR DELETE ON events
+  FOR EACH ROW EXECUTE FUNCTION reject_event_mutation();
 
 CREATE TABLE outbox_messages (
-  tenant_id UUID NOT NULL, delivery_id UUID NOT NULL, event_id UUID NOT NULL,
-  status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending','Delivered','Dead')),
-  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-  available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  locked_until TIMESTAMPTZ, delivered_at TIMESTAMPTZ, last_error TEXT,
+  tenant_id UUID NOT NULL,
+  delivery_id UUID NOT NULL,
+  event_id UUID NOT NULL,
+  topic TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  delivered_at TIMESTAMPTZ,
   PRIMARY KEY (tenant_id, delivery_id),
   UNIQUE (tenant_id, event_id),
-  FOREIGN KEY (tenant_id, event_id) REFERENCES events(tenant_id, event_id)
+  FOREIGN KEY (tenant_id, event_id)
+    REFERENCES events (tenant_id, event_id)
     ON DELETE RESTRICT
 );
-CREATE INDEX idx_outbox_pending ON outbox_messages (available_at) WHERE status = 'Pending';
+CREATE INDEX outbox_pending_idx
+  ON outbox_messages (created_at, delivery_id)
+  WHERE delivered_at IS NULL;
 
 -- -----------------------------------------------------------------------------
 -- 12. Budgets, usage, rate limits, kill switches
@@ -766,7 +780,7 @@ CREATE TABLE retention_log (   -- no tenant_id: privileges only, no tenant polic
 DO $$
 DECLARE t TEXT;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['snapshots','events','policy_decisions'] LOOP
+  FOREACH t IN ARRAY ARRAY['snapshots','policy_decisions'] LOOP
     EXECUTE format('CREATE TRIGGER trg_%s_append_only BEFORE UPDATE OR DELETE ON %I
                     FOR EACH ROW EXECUTE FUNCTION forbid_mutation()', t, t);
     EXECUTE format('CREATE TRIGGER trg_%s_no_truncate BEFORE TRUNCATE ON %I
@@ -954,11 +968,11 @@ GRANT SELECT, INSERT, UPDATE ON
   objects, object_versions, callers, object_invocations, invocation_idempotency,
   interaction_messages, knowledge_revisions, knowledge_documents, knowledge_chunks,
   knowledge_chunk_embeddings, memories, memory_conflicts, memory_embeddings, object_tools,
-  tool_command_payloads, tool_executions, outbox_messages, object_budgets, budget_reservations,
+  tool_command_payloads, tool_executions, object_budgets, budget_reservations,
   usage_counters, caller_usage_counters, budget_event_dedup, object_goals, object_tasks,
   deletion_jobs TO qembed_runtime;
 GRANT INSERT, SELECT ON knowledge_revision_log, snapshots, policy_decisions, events,
-  deletion_ledger TO qembed_runtime;                                    -- append-only: no UPDATE
+  outbox_messages, deletion_ledger TO qembed_runtime;                   -- append-only/event records: no UPDATE
 GRANT INSERT, UPDATE, DELETE ON kill_switches TO qembed_runtime;
 GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddings,
   knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
@@ -969,7 +983,8 @@ GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), resolve_object_tenant(u
 
 -- dispatcher: only delivery
 GRANT SELECT ON events TO qembed_dispatcher;
-GRANT SELECT, UPDATE ON outbox_messages TO qembed_dispatcher;
+GRANT SELECT ON outbox_messages TO qembed_dispatcher;
+GRANT UPDATE (delivered_at) ON outbox_messages TO qembed_dispatcher;
 
 -- admin
 GRANT SELECT, INSERT, UPDATE ON tenants, principals, kill_switches, objects,
