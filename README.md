@@ -54,8 +54,7 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Остаются расхождения, закрываемые следующими аудитами: `snapshots.json_projection` и обязательные projection-колонки (004),
-состав колонок `events`/`outbox_messages` (005).
+Остаются расхождения, закрываемые следующими аудитами: состав колонок `events`/`outbox_messages` (005).
 
 
 ### AUDIT-002: owner authentication
