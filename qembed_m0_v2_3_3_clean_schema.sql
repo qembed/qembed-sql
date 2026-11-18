@@ -4,8 +4,8 @@
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
--- Rust-compat remediation: AUDIT-001..007 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS).
--- AUDIT-008..010 are separate patches.
+-- Rust-compat remediation: AUDIT-001..008 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS, composite tenant FKs).
+-- AUDIT-009..010 are separate patches.
 -- =============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -389,6 +389,95 @@ CREATE INDEX idx_inv_active ON object_invocations (tenant_id, object_id)
   WHERE status NOT IN ('Completed','CompletedDegraded','Failed','Cancelled');
 CREATE INDEX idx_inv_lease ON object_invocations (lease_until)
   WHERE status NOT IN ('Completed','CompletedDegraded','Failed','Cancelled');
+
+-- AUDIT-009: Invocation lifecycle and fencing follow qembed-domain::Invocation.
+-- State changes and lease reclaim are separate optimistic-version increments.
+CREATE FUNCTION invocation_state_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $invocation_state_guard$
+DECLARE
+  status_changed BOOLEAN;
+  token_changed BOOLEAN;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status <> 'Received' OR NEW.version <> 0 OR NEW.fencing_token <> 0
+       OR NEW.lease_owner IS NOT NULL OR NEW.lease_until IS NOT NULL
+       OR NEW.finished_at IS NOT NULL THEN
+      RAISE EXCEPTION 'new invocation must start Received at version/token zero without a lease'
+        USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF (NEW.id, NEW.tenant_id, NEW.object_id, NEW.caller_id, NEW.snapshot_id,
+      NEW.knowledge_revision, NEW.pool, NEW.trace_id, NEW.started_at)
+     IS DISTINCT FROM
+     (OLD.id, OLD.tenant_id, OLD.object_id, OLD.caller_id, OLD.snapshot_id,
+      OLD.knowledge_revision, OLD.pool, OLD.trace_id, OLD.started_at) THEN
+    RAISE EXCEPTION 'invocation identity is immutable' USING ERRCODE = '55000';
+  END IF;
+
+  IF OLD.status IN ('Completed','CompletedDegraded','Failed','Cancelled') THEN
+    RAISE EXCEPTION 'terminal invocation is immutable' USING ERRCODE = '55000';
+  END IF;
+
+  status_changed := NEW.status IS DISTINCT FROM OLD.status;
+  token_changed := NEW.fencing_token IS DISTINCT FROM OLD.fencing_token;
+
+  IF status_changed AND NOT (
+       (NEW.status IN ('Failed','Cancelled'))
+    OR (OLD.status = 'Received' AND NEW.status = 'ContextLoading')
+    OR (OLD.status = 'ContextLoading' AND NEW.status = 'Processing')
+    OR (OLD.status = 'Processing' AND NEW.status = 'ExecutingTool')
+    OR (OLD.status = 'ExecutingTool' AND NEW.status = 'Processing')
+    OR (OLD.status = 'Processing' AND NEW.status = 'Verifying')
+    OR (OLD.status = 'Verifying' AND NEW.status IN ('Completed','CompletedDegraded'))
+  ) THEN
+    RAISE EXCEPTION 'invalid invocation state transition: % -> %', OLD.status, NEW.status
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF NEW.fencing_token < OLD.fencing_token THEN
+    RAISE EXCEPTION 'stale invocation fencing token' USING ERRCODE = '40001';
+  END IF;
+
+  IF status_changed AND token_changed THEN
+    RAISE EXCEPTION 'state transition and lease reclaim must be separate CAS operations'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF status_changed OR token_changed THEN
+    IF OLD.version = 9223372036854775807 OR NEW.version <> OLD.version + 1 THEN
+      RAISE EXCEPTION 'invocation optimistic version must advance exactly once'
+        USING ERRCODE = '40001';
+    END IF;
+  ELSIF NEW.version <> OLD.version THEN
+    RAISE EXCEPTION 'invocation version changed without state transition or lease reclaim'
+      USING ERRCODE = '40001';
+  END IF;
+
+  IF token_changed THEN
+    IF NEW.fencing_token <= OLD.fencing_token
+       OR OLD.lease_owner IS NULL OR OLD.lease_until IS NULL
+       OR OLD.lease_until >= now()
+       OR NEW.lease_owner IS NULL OR NEW.lease_until IS NULL THEN
+      RAISE EXCEPTION 'fencing token may advance only when reclaiming an expired lease'
+        USING ERRCODE = '23514';
+    END IF;
+  ELSIF OLD.lease_owner IS NOT NULL
+        AND OLD.lease_until > now()
+        AND NEW.lease_owner IS DISTINCT FROM OLD.lease_owner THEN
+    RAISE EXCEPTION 'an active invocation lease cannot be stolen'
+      USING ERRCODE = '40001';
+  END IF;
+
+  RETURN NEW;
+END
+$invocation_state_guard$;
+
+CREATE TRIGGER trg_invocation_state_guard
+  BEFORE INSERT OR UPDATE ON object_invocations
+  FOR EACH ROW EXECUTE FUNCTION invocation_state_guard();
+
 
 CREATE TABLE invocation_idempotency (
   tenant_id UUID NOT NULL, object_id UUID NOT NULL, caller_id UUID NOT NULL,
