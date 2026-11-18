@@ -14,7 +14,7 @@ The relationship is represented by principal_caller_delegations. UUID equality b
 1. Every delegation is tenant-scoped and has composite foreign keys to both owner_principals(tenant_id, caller_id) and callers(tenant_id, id).
 2. A Principal may hold multiple active delegations. A Caller may be delegated to more than one Principal; authorization is evaluated for the exact Principal/Caller pair.
 3. A grant is direct. A Caller cannot create or forward delegations, so delegation chains are not implicit or transitive.
-4. Any existing Caller kind (Anonymous, Authenticated, Service) may be selected explicitly. The Caller kind remains the authoritative type; it is not inferred from the Principal.
+4. Any existing Caller kind (Anonymous, Authenticated, Service) may be selected explicitly. The Caller kind remains the authoritative type; it is not inferred from the Principal. Invocation pool is a separate budget/execution classification and must not be inferred from Caller kind; Service-to-pool policy remains an explicit Rust/application decision.
 5. A Principal can grant and revoke only its own delegations. The trusted application transaction sets app.tenant_id and app.principal_id after authentication. Client DTOs must not set either value.
 6. A grant is append-only history. Revocation is final and records revoked_at plus revoked_by_principal_id. Re-granting after revocation creates a new delegation_id; the partial unique index permits only one active grant for a given tenant/Principal/Caller tuple.
 7. Granting requires an active Principal and an active Caller in the same tenant. Invocation-time resolution must re-check both states and the active delegation; a grant does not keep a revoked Caller or disabled Principal alive.
