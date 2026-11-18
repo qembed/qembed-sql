@@ -8,6 +8,21 @@ SELECT tt.chk('AUDIT-010 application roles cannot create in public',
        FROM unnest(ARRAY['qembed_runtime','qembed_dispatcher','qembed_admin','qembed_retention','qembed_definer']) AS r$q$);
 
 SET ROLE qembed_runtime;
+-- A caller may create temporary objects, but they must not shadow relations used
+-- by SECURITY DEFINER functions: pg_temp is explicitly last in their search_path.
+CREATE TEMP TABLE principals (
+  id uuid, tenant_id uuid, kind text, key_hash bytea, revoked_at timestamptz
+);
+INSERT INTO principals VALUES
+  ('99999999-0000-0000-0000-000000000099',
+   'bbbbbbbb-0000-0000-0000-000000000002','TenantOwner','\\x01',NULL);
+CREATE TEMP TABLE objects (object_id uuid, tenant_id uuid);
+SELECT tt.chk('AUDIT-010 authenticate_principal ignores temporary shadow table',
+  $q$SELECT EXISTS (SELECT 1 FROM authenticate_principal('\\x01')
+       WHERE principal_id='22222222-0000-0000-0000-00000000000a')$q$);
+SELECT tt.chk('AUDIT-010 resolve_object_tenant ignores temporary shadow table',
+  $q$SELECT resolve_object_tenant('0b000000-0000-0000-0000-000000000001')
+       = 'aaaaaaaa-0000-0000-0000-000000000001'::uuid$q$);
 SELECT tt.try('AUDIT-010 runtime cannot create objects in SECURITY DEFINER search_path', 'err',
   $q$CREATE FUNCTION public.audit010_shadow() RETURNS integer LANGUAGE sql AS 'SELECT 1'$q$);
 SELECT tt.try('AUDIT-010 runtime cannot execute retention_purge', 'err',
