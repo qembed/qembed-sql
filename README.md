@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `ec34893aafcd69f7a05e9713be64de5faa4c2d86ee73bc421cbbd42146012885`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `60598a97e48a23b1af93fa436744522932a3ee177619a081620e9a6c04fd7e67`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -37,7 +37,8 @@ Rust-репозиторий — неизменяемый источник кон
 | Audit | Статус |
 |---|---|
 | AUDIT-001 физические имена/ключи | **применён** (этот патч) |
-| AUDIT-002 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-002 owner authentication | **применён** (`owner_principals`, `owner_credentials`) |
+| AUDIT-003 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -52,5 +53,14 @@ Rust-репозиторий — неизменяемый источник кон
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
 Остаются расхождения, закрываемые следующими аудитами: значения `objects.state` и индекс одной Draft-версии (003),
-`snapshots.json_projection` и обязательные projection-колонки (004), состав колонок `events`/`outbox_messages` (005),
-owner-таблицы (002).
+`snapshots.json_projection` и обязательные projection-колонки (004), состав колонок `events`/`outbox_messages` (005).
+
+
+### AUDIT-002: owner authentication
+- Rust auth path использует таблицы `owner_principals` и `owner_credentials` (колонки/PK/FK/CHECK как в Rust-миграции).
+  r3 `principals`/`callers`/`authenticate_principal` остаются отдельным будущим расширением и Rust-путём не используются.
+- Pre-auth lookup идёт без tenant Scope, поэтому tenant-RLS на этих таблицах нет; доступ ограничен column-level grants:
+  роль приложения (`qembed_runtime`) имеет только SELECT на колонки, которые читает Rust-запрос. Создание и отзыв
+  credentials — `qembed_admin` (INSERT/UPDATE, без DELETE). Revisit в AUDIT-006.
+- `owner_credentials_active_lookup` — UNIQUE по `(tenant_id, token_hash) WHERE revoked_at IS NULL`: два активных
+  credentials с одним digest в tenant невозможны. Digest и идентичность неизменяемы, отзыв необратим.

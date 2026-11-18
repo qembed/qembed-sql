@@ -100,6 +100,59 @@ CREATE TABLE principals (   -- restricted-global: tenant_id NULL only for Platfo
 );
 
 -- -----------------------------------------------------------------------------
+-- 3a. Owner authentication (AUDIT-002): physical model of the current Rust auth path
+--     (Rust migration 20261118000000_owner_authentication.sql, qembed-store/src/auth.rs).
+--     Principal = identity of the tenant owner; credential = SHA-256 digest of a high-entropy
+--     API token. Raw tokens are never stored. The Rust adapter performs a PRE-AUTH lookup (no
+--     tenant Scope exists yet), so these tables carry no tenant RLS policy: access is restricted
+--     by column-level grants only (see section 17). principals/callers above are the future model
+--     and are NOT used by the Rust auth path.
+-- -----------------------------------------------------------------------------
+CREATE TABLE owner_principals (
+  tenant_id UUID NOT NULL,
+  caller_id UUID NOT NULL,
+  principal_kind TEXT NOT NULL CHECK (principal_kind = 'tenant_owner'),
+  disabled_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, caller_id)
+);
+
+CREATE TABLE owner_credentials (
+  tenant_id UUID NOT NULL,
+  caller_id UUID NOT NULL,
+  token_hash BYTEA NOT NULL CHECK (octet_length(token_hash) = 32),
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, caller_id, token_hash),
+  FOREIGN KEY (tenant_id, caller_id)
+    REFERENCES owner_principals (tenant_id, caller_id)
+    ON DELETE RESTRICT
+);
+
+-- Same name/predicate as the Rust index, but UNIQUE: at most one ACTIVE credential per
+-- (tenant, digest), so the Rust lookup can never match two principals. Revoked rows are outside
+-- the predicate, so a digest of a revoked credential does not block a later one.
+CREATE UNIQUE INDEX owner_credentials_active_lookup
+  ON owner_credentials (tenant_id, token_hash)
+  WHERE revoked_at IS NULL;
+
+-- Digest/identity are immutable and revocation is final (issue a new credential instead).
+CREATE FUNCTION owner_credentials_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF (NEW.tenant_id, NEW.caller_id, NEW.token_hash, NEW.created_at)
+     IS DISTINCT FROM (OLD.tenant_id, OLD.caller_id, OLD.token_hash, OLD.created_at) THEN
+    RAISE EXCEPTION 'owner credential identity and digest are immutable';
+  END IF;
+  IF OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+    RAISE EXCEPTION 'owner credential revocation is final';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_owner_credentials_guard BEFORE UPDATE ON owner_credentials
+  FOR EACH ROW EXECUTE FUNCTION owner_credentials_guard();
+
+-- -----------------------------------------------------------------------------
 -- 4. Objects and versions
 -- -----------------------------------------------------------------------------
 -- AUDIT-001: physical name and keys follow Rust migration 20261118000001_objects.sql.
@@ -873,6 +926,9 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
 
 -- runtime
 GRANT SELECT ON embedding_models, tool_definitions, tool_versions, tenants, principals, kill_switches TO qembed_runtime;
+-- AUDIT-002: pre-auth lookup for the Rust adapter, read-only and limited to the columns it queries.
+GRANT SELECT (tenant_id, caller_id, principal_kind, disabled_at) ON owner_principals TO qembed_runtime;
+GRANT SELECT (tenant_id, caller_id, token_hash, revoked_at) ON owner_credentials TO qembed_runtime;
 GRANT SELECT, INSERT, UPDATE ON
   objects, object_versions, callers, object_invocations, invocation_idempotency,
   interaction_messages, knowledge_revisions, knowledge_documents, knowledge_chunks,
@@ -898,6 +954,7 @@ GRANT SELECT, UPDATE ON outbox_messages TO qembed_dispatcher;
 GRANT SELECT, INSERT, UPDATE ON tenants, principals, kill_switches, objects,
   embedding_models, tool_definitions, tool_versions TO qembed_admin;
 GRANT SELECT, INSERT ON knowledge_revisions TO qembed_admin;          -- r3 (R3-06)
+GRANT SELECT, INSERT, UPDATE ON owner_principals, owner_credentials TO qembed_admin;  -- AUDIT-002: provision / disable / revoke (no DELETE)
 
 -- retention
 GRANT EXECUTE ON FUNCTION retention_purge(text,timestamptz,text) TO qembed_retention;
@@ -922,7 +979,8 @@ BEGIN
    WHERE n.nspname = 'public' AND c.relkind IN ('r','p')
      AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
      AND c.relname NOT IN ('embedding_models','tool_definitions','tool_versions',
-                           'rate_limit_buckets','retention_log');
+                           'rate_limit_buckets','retention_log',
+                           'owner_principals','owner_credentials');   -- AUDIT-002: pre-auth, grants-only (revisit in AUDIT-006)
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'RLS/FORCE missing on: %', bad; END IF;
 END $$;
 
