@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `637670dd7a5139217db7be9fe3c7501ea14bba3a3c368def9a0d2379266799fe`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `6ea86b7ffa2d45cf7283046006c29123d7abc86d6991d1b532de5d6b228891fe`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -42,8 +42,9 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-004 snapshots | **применён** (canonical bytes, hash, JSONB projection, immutability) |
 | AUDIT-005 events/outbox | **применён** (Rust columns, append-only events, delivery timestamp) |
 | AUDIT-006 tenant RLS | **применён** (ENABLE/FORCE, actual-table isolation tests, pre-auth exception) |
-| AUDIT-007 ObjectVersion / object lifecycle | **PR #7** (строгие переходы статусов и неизменяемая identity; ожидает ревью) |
-| AUDIT-008 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-007 ObjectVersion / object lifecycle | **применён** (строгие переходы статусов и неизменяемая identity) |
+| AUDIT-008 composite tenant FKs | **PR #8** (каталожная проверка и cross-tenant negative tests; ожидает ревью) |
+| AUDIT-009 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
