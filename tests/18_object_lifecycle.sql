@@ -2,7 +2,6 @@
 \set ON_ERROR_STOP on
 SET client_min_messages=warning;
 
-BEGIN;
 INSERT INTO objects(tenant_id,object_id,state)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000001','draft');
 INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number,status)
@@ -38,4 +37,6 @@ UPDATE objects SET state='archived'
  WHERE object_id='18000000-0000-0000-0000-000000000001';
 SELECT tt.try('AUDIT-007 Archived object cannot be revived','err',
  $q$UPDATE objects SET state='active' WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
-ROLLBACK;
+SELECT tt.try('AUDIT-007 Archived published pointer cannot be replaced','err',
+ $q$UPDATE objects SET published_version_id='18000000-0000-0000-0000-000000000002' WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
+
