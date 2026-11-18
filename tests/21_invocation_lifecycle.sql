@@ -1,8 +1,8 @@
 -- AUDIT-009: Invocation state machine, optimistic version and lease fencing.
-\\set A '''aaaaaaaa-0000-0000-0000-000000000001'''
+\set A '''aaaaaaaa-0000-0000-0000-000000000001'''
 SET client_min_messages=warning;
 SET ROLE qembed_runtime;
-SELECT set_config('app.tenant_id', :A, false) \\gset
+SELECT set_config('app.tenant_id', :A, false) \gset
 
 SELECT tt.try('AUDIT-009 new invocation must start Received', 'err', $q$
   INSERT INTO object_invocations
