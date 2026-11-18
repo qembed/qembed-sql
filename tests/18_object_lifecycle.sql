@@ -29,8 +29,13 @@ SELECT tt.try('AUDIT-007 Draft -> Active shortcut is rejected','err',
 UPDATE objects SET state='validating' WHERE object_id='18000000-0000-0000-0000-000000000001';
 SELECT tt.try('AUDIT-007 Validating -> Archived shortcut is rejected','err',
  $q$UPDATE objects SET state='archived' WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
-UPDATE objects SET state='draft' WHERE object_id='18000000-0000-0000-0000-000000000001';
+-- Complete a valid first publication, then verify Archived is terminal.
+UPDATE object_versions SET status='published'
+ WHERE object_version_id='18000000-0000-0000-0000-000000000003';
+UPDATE objects SET state='active', published_version_id='18000000-0000-0000-0000-000000000003'
+ WHERE object_id='18000000-0000-0000-0000-000000000001';
+UPDATE objects SET state='archived'
+ WHERE object_id='18000000-0000-0000-0000-000000000001';
 SELECT tt.try('AUDIT-007 Archived object cannot be revived','err',
- $q$UPDATE objects SET state='archived' WHERE object_id='18000000-0000-0000-0000-000000000001';
-   UPDATE objects SET state='draft' WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
+ $q$UPDATE objects SET state='active' WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
 ROLLBACK;
