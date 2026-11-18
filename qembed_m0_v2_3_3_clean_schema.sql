@@ -4,8 +4,8 @@
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
--- Rust-compat remediation: AUDIT-001..008 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS, composite tenant FKs).
--- AUDIT-009..010 are separate patches.
+-- Rust-compat remediation: AUDIT-001..009 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS, composite tenant FKs, Invocation lifecycle/fencing).
+-- AUDIT-010 is the final security-hardening patch.
 -- =============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -46,6 +46,11 @@ BEGIN
 END $$;
 -- qembed_definer: NOLOGIN owner of SECURITY DEFINER functions (A2). Subject to
 -- RLS; sees data only through explicit policies defined in section 20.
+
+-- SECURITY DEFINER functions use this schema in their fixed search_path.
+-- Application and PUBLIC roles must never be able to shadow objects there.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer;
 
 -- -----------------------------------------------------------------------------
 -- 1. Guards
@@ -1034,12 +1039,12 @@ CREATE POLICY admin_knowledge_revisions_ins ON knowledge_revisions FOR INSERT TO
 -- -----------------------------------------------------------------------------
 CREATE FUNCTION authenticate_principal(p_key_hash BYTEA)
 RETURNS TABLE (principal_id UUID, tenant_id UUID, kind TEXT)
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
   SELECT id, tenant_id, kind FROM principals WHERE key_hash = p_key_hash AND revoked_at IS NULL
 $$;
 
 CREATE FUNCTION resolve_object_tenant(p_object_id UUID)
-RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
   SELECT tenant_id FROM objects WHERE object_id = p_object_id
 $$;
 
@@ -1047,7 +1052,7 @@ $$;
 -- the worker then acts under the proper Scope (SET LOCAL app.tenant_id).
 CREATE FUNCTION list_expired_invocation_leases(p_limit INT)
 RETURNS TABLE (tenant_id UUID, invocation_id UUID, fencing_token BIGINT)
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
   SELECT tenant_id, id, fencing_token FROM object_invocations
    WHERE lease_until < now()
      AND status NOT IN ('Completed','CompletedDegraded','Failed','Cancelled')
@@ -1056,7 +1061,7 @@ $$;
 
 CREATE FUNCTION list_pending_reconciliations(p_limit INT)
 RETURNS TABLE (tenant_id UUID, execution_id UUID)
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
   SELECT tenant_id, id FROM tool_executions
    WHERE (status = 'Unknown' AND reconciliation_state = 'pending')
       OR (status = 'Executing' AND lease_until < now())
@@ -1065,7 +1070,7 @@ $$;
 
 -- Idempotent sweeper (T-40)
 CREATE FUNCTION sweep_expired_reservations(p_limit INT) RETURNS INT
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE r RECORD; n INT := 0;
 BEGIN
   FOR r IN SELECT * FROM budget_reservations
@@ -1092,7 +1097,7 @@ END $$;
 
 -- Retention: fixed whitelist, per-table action (A8). Append-only tables are NOT purgeable here.
 CREATE FUNCTION retention_purge(p_table TEXT, p_cutoff TIMESTAMPTZ, p_reason TEXT) RETURNS BIGINT
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE n BIGINT;
 BEGIN
   IF p_table = 'interaction_messages' THEN
