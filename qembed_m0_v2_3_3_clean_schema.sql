@@ -5,7 +5,7 @@
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
 -- Rust-compat remediation: AUDIT-001..004 applied (physical contracts, owner auth, object state/drafts, snapshots).
--- AUDIT-005..010 are separate patches.
+-- AUDIT-006..010 are separate patches.
 -- =============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
