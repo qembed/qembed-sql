@@ -107,3 +107,10 @@ Rust-репозиторий — неизменяемый источник кон
 - Object state transitions соответствуют `ObjectState::can_transition_to`: Draft→Validating, Validating→Draft/Active, Active↔Suspended, Active/Suspended→Archived. Archived terminal.
 - Pointer-only updates остаются допустимыми для атомарной публикации/замены; существующий pointer guard проверяет принадлежность и Published status целевой версии.
 - Regression coverage: `tests/18_object_lifecycle.sql`, подключён в smoke runner.
+
+
+### AUDIT-008: composite tenant foreign keys
+- Проверяется каталогом, что любой FK на таблицу с `tenant_id NOT NULL` одновременно связывает `tenant_id` дочерней и родительской строк.
+- Negative tests доказывают отказ cross-tenant ссылок для `object_versions`, `snapshots`, `outbox_messages`, `owner_credentials` и `objects.published_version_id`.
+- Rust migrations уже определяют соответствующие composite FKs; AUDIT-008 закрепляет этот контракт в SQL smoke suite и защищает расширенные таблицы от регрессии.
+- Rust-код и Rust migrations не изменяются.
