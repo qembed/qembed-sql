@@ -14,7 +14,7 @@ SELECT tt.chk('AUDIT-001 r3 table names are gone',
  $q$SELECT count(*)=0 FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','v','m')
       AND relname IN ('qembed_objects','runtime_snapshots','object_events','outbox')$q$);
 
-SELECT tt.chk('AUDIT-001 column contract (type, NOT NULL, default) of Rust columns',
+SELECT tt.chk('AUDIT-001/004 column contract (type, NOT NULL, default) of Rust columns',
  $q$WITH want(t,c,ty,nn,def) AS (VALUES
    ('objects','tenant_id','uuid',true,NULL::text),
    ('objects','object_id','uuid',true,NULL),
@@ -34,6 +34,7 @@ SELECT tt.chk('AUDIT-001 column contract (type, NOT NULL, default) of Rust colum
    ('snapshots','schema_version','integer',true,NULL),
    ('snapshots','canonical_json','bytea',true,NULL),
    ('snapshots','content_hash','bytea',true,NULL),
+   ('snapshots','json_projection','jsonb',true,NULL),
    ('snapshots','created_at','timestamp with time zone',true,'now()'),
    ('events','tenant_id','uuid',true,NULL),
    ('events','event_id','uuid',true,NULL),
