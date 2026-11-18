@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `6ea86b7ffa2d45cf7283046006c29123d7abc86d6991d1b532de5d6b228891fe`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `6918dad0b9ca4c59195ca88e80b4e0e15c532b66e47566f3371d4051820993d0`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -24,7 +24,7 @@
 ## Open items (не закрыты в r3)
 - RT-046 tenant lifecycle / legal hold (T-62).
 - GC знаний: нет `DELETE`-пути (M2, T-44).
-- Нет DB-guard на переходы `object_invocations` (рекомендуется до M1b).
+- DB-guard на Invocation lifecycle/fencing добавлен в AUDIT-009; конкурентный multi-session test остаётся отдельной проверкой.
 - Review `qembed_definer` grants/policies, тест на произвольный SQL через функции.
 
 ## Start coding
@@ -43,8 +43,9 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-005 events/outbox | **применён** (Rust columns, append-only events, delivery timestamp) |
 | AUDIT-006 tenant RLS | **применён** (ENABLE/FORCE, actual-table isolation tests, pre-auth exception) |
 | AUDIT-007 ObjectVersion / object lifecycle | **применён** (строгие переходы статусов и неизменяемая identity) |
-| AUDIT-008 composite tenant FKs | **PR #8** (каталожная проверка и cross-tenant negative tests; ожидает ревью) |
-| AUDIT-009 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-008 composite tenant FKs | **применён** (каталожная проверка и cross-tenant negative tests) |
+| AUDIT-009 Invocation lifecycle/fencing | **PR** (state machine, optimistic version и lease reclaim guard; ожидает ревью) |
+| AUDIT-010 | не применён, отдельный патч |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -115,3 +116,12 @@ Rust-репозиторий — неизменяемый источник кон
 - Negative tests доказывают отказ cross-tenant ссылок для `object_versions`, `snapshots`, `outbox_messages`, `owner_credentials` и `objects.published_version_id`.
 - Rust migrations уже определяют соответствующие composite FKs; AUDIT-008 закрепляет этот контракт в SQL smoke suite и защищает расширенные таблицы от регрессии.
 - Rust-код и Rust migrations не изменяются.
+
+
+### AUDIT-009: Invocation lifecycle and fencing
+- PostgreSQL state transitions mirror `InvocationStatus::can_transition_to`: Received→ContextLoading→Processing; Processing↔ExecutingTool; Processing→Verifying; Verifying→Completed/CompletedDegraded; any nonterminal state may transition to Failed/Cancelled. Terminal states cannot transition again.
+- New invocations start at Received with version/fencing token zero. Identity is immutable.
+- Each accepted state transition and each successful expired-lease reclaim increments optimistic `version` exactly once; heartbeat/initial claim do not. Reclaim must strictly advance the fencing token and install a lease. State transition and reclaim are separate CAS operations.
+- Active leases cannot be stolen. A stale worker cannot write using a lower fencing token. Regression coverage: `tests/21_invocation_lifecycle.sql`, wired into the smoke runner.
+- ToolExecution remains outside this audit: the Rust repository currently has no ToolExecution domain/repository contract. Its existing Unknown/reconciliation SQL guard is unchanged.
+- Rust source, migrations, and roadmap are not modified.
