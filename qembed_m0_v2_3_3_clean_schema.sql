@@ -196,29 +196,107 @@ ALTER TABLE objects
   REFERENCES object_versions(tenant_id, object_id, object_version_id)
   ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED;
 
-CREATE FUNCTION object_versions_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+-- AUDIT-007: ObjectVersion follows the Rust domain state machine:
+-- Draft -> Published -> Superseded. Superseded is terminal; identity and
+-- version_number never change. Published content is immutable.
+CREATE OR REPLACE FUNCTION object_versions_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $object_version_guard$
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status <> 'draft' THEN
+      RAISE EXCEPTION 'new object versions must start as Draft' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
-    IF OLD.status <> 'draft' THEN RAISE EXCEPTION 'published version is immutable'; END IF;
+    IF OLD.status <> 'draft' THEN
+      RAISE EXCEPTION 'only draft object versions may be deleted' USING ERRCODE = '55000';
+    END IF;
     RETURN OLD;
   END IF;
-  IF OLD.status <> 'draft' THEN
-    IF OLD.status = 'published' AND NEW.status = 'superseded' AND
-       (NEW.object_version_id, NEW.tenant_id, NEW.object_id, NEW.config, NEW.chat_model_ref,
-        NEW.embedding_model_id, NEW.version_number, NEW.published_at, NEW.created_at)
-       IS NOT DISTINCT FROM
-       (OLD.object_version_id, OLD.tenant_id, OLD.object_id, OLD.config, OLD.chat_model_ref,
-        OLD.embedding_model_id, OLD.version_number, OLD.published_at, OLD.created_at)
-    THEN RETURN NEW; END IF;
-    RAISE EXCEPTION 'published version is immutable';
+
+  IF (NEW.object_version_id, NEW.tenant_id, NEW.object_id, NEW.version_number, NEW.created_at)
+     IS DISTINCT FROM
+     (OLD.object_version_id, OLD.tenant_id, OLD.object_id, OLD.version_number, OLD.created_at) THEN
+    RAISE EXCEPTION 'object version identity is immutable' USING ERRCODE = '55000';
   END IF;
-  IF NEW.status = 'superseded' THEN RAISE EXCEPTION 'invalid transition'; END IF;
-  IF (NEW.object_version_id, NEW.tenant_id, NEW.object_id) IS DISTINCT FROM (OLD.object_version_id, OLD.tenant_id, OLD.object_id)
-  THEN RAISE EXCEPTION 'identity columns are immutable'; END IF;
-  RETURN NEW;
-END $$;
-CREATE TRIGGER trg_object_versions_guard BEFORE UPDATE OR DELETE ON object_versions
+
+  IF OLD.status = 'draft' THEN
+    IF NEW.status NOT IN ('draft', 'published') THEN
+      RAISE EXCEPTION 'invalid object version transition: % -> %', OLD.status, NEW.status
+        USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF OLD.status = 'published' AND NEW.status = 'superseded' THEN
+    IF (NEW.config, NEW.chat_model_ref, NEW.embedding_model_id, NEW.published_at)
+       IS DISTINCT FROM
+       (OLD.config, OLD.chat_model_ref, OLD.embedding_model_id, OLD.published_at) THEN
+      RAISE EXCEPTION 'published object version content is immutable' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'invalid or terminal object version transition: % -> %', OLD.status, NEW.status
+    USING ERRCODE = '23514';
+END
+$object_version_guard$;
+
+CREATE TRIGGER trg_object_versions_guard BEFORE INSERT OR UPDATE OR DELETE ON object_versions
   FOR EACH ROW EXECUTE FUNCTION object_versions_guard();
+
+-- Object lifecycle transitions mirror qembed-domain::ObjectState::can_transition_to.
+-- Pointer-only updates are allowed for atomic publication/replacement; the
+-- existing pointer guard verifies that the target is a Published version.
+CREATE FUNCTION object_state_transition_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $object_state_guard$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.state <> 'draft' OR NEW.published_version_id IS NOT NULL THEN
+      RAISE EXCEPTION 'new objects must start as Draft without a published version'
+        USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF (NEW.tenant_id, NEW.object_id, NEW.created_at)
+     IS DISTINCT FROM (OLD.tenant_id, OLD.object_id, OLD.created_at) THEN
+    RAISE EXCEPTION 'object identity is immutable' USING ERRCODE = '55000';
+  END IF;
+
+  IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
+       (OLD.state = 'draft' AND NEW.state = 'validating')
+    OR (OLD.state = 'validating' AND NEW.state = 'draft')
+    OR (OLD.state = 'validating' AND NEW.state = 'active')
+    OR (OLD.state = 'active' AND NEW.state = 'suspended')
+    OR (OLD.state = 'suspended' AND NEW.state = 'active')
+    OR (OLD.state = 'active' AND NEW.state = 'archived')
+    OR (OLD.state = 'suspended' AND NEW.state = 'archived')
+  ) THEN
+    RAISE EXCEPTION 'invalid object state transition: % -> %', OLD.state, NEW.state
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF NEW.published_version_id IS DISTINCT FROM OLD.published_version_id
+     AND NOT (
+       (OLD.state = 'validating' AND NEW.state = 'active'
+        AND OLD.published_version_id IS NULL AND NEW.published_version_id IS NOT NULL)
+       OR (OLD.state IN ('active', 'suspended')
+           AND NEW.state = OLD.state
+           AND NEW.published_version_id IS NOT NULL)
+     ) THEN
+    RAISE EXCEPTION 'published version pointer may change only during activation or active replacement'
+      USING ERRCODE = '23514';
+  END IF;
+
+  RETURN NEW;
+END
+$object_state_guard$;
+CREATE TRIGGER trg_object_state_transition_guard
+  BEFORE INSERT OR UPDATE ON objects FOR EACH ROW
+  EXECUTE FUNCTION object_state_transition_guard();
 
 -- -----------------------------------------------------------------------------
 -- 5. Callers
