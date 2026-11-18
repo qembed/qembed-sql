@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `495eeabb8d6274ff9c5b61756afa5dbd0a55692d16bef05d47b785f0592fd2ce`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `b960df983e7fc39256793047b72df25a92c9948b3e92128f8c5138e5d12ee41e`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -25,7 +25,7 @@
 - RT-046 tenant lifecycle / legal hold (T-62).
 - GC знаний: нет `DELETE`-пути (M2, T-44).
 - DB-guard на Invocation lifecycle/fencing добавлен в AUDIT-009; конкурентный multi-session test остаётся отдельной проверкой.
-- Review `qembed_definer` grants/policies, тест на произвольный SQL через функции.
+- RT-046 tenant lifecycle / legal hold (T-62) и GC знаний (M2, T-44) остаются вне AUDIT-010.
 
 ## Start coding
 Архитектура заморожена для M1a (addendum §7–§8, RT-047). SQL — candidate до прохождения T-01…T-64 на PG 15/16 × pgvector ≥0.8.0. Внешние write-tools не включать до T-07, T-22, T-38, T-46, T-47, T-52, T-59, T-64.
@@ -44,8 +44,8 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-006 tenant RLS | **применён** (ENABLE/FORCE, actual-table isolation tests, pre-auth exception) |
 | AUDIT-007 ObjectVersion / object lifecycle | **применён** (строгие переходы статусов и неизменяемая identity) |
 | AUDIT-008 composite tenant FKs | **применён** (каталожная проверка и cross-tenant negative tests) |
-| AUDIT-009 Invocation lifecycle/fencing | **PR #9** (state machine, optimistic version и lease reclaim guard; ожидает ревью) |
-| AUDIT-010 | не применён, отдельный патч |
+| AUDIT-009 Invocation lifecycle/fencing | **применён** (state machine, optimistic version и lease reclaim guard) |
+| AUDIT-010 SECURITY DEFINER hardening | **PR** (search_path, grants и injection regression tests; ожидает ревью) |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -125,3 +125,12 @@ Rust-репозиторий — неизменяемый источник кон
 - Active leases cannot be stolen. A stale worker cannot write using a lower fencing token. Regression coverage: `tests/21_invocation_lifecycle.sql`, wired into the smoke runner.
 - ToolExecution remains outside this audit: the Rust repository currently has no ToolExecution domain/repository contract. Its existing Unknown/reconciliation SQL guard is unchanged.
 - Rust source, migrations, and roadmap are not modified.
+
+
+### AUDIT-010: SECURITY DEFINER hardening
+- Revoke `CREATE` on schema `public` from `PUBLIC` and all application roles. This prevents untrusted objects from shadowing names resolved by SECURITY DEFINER functions whose search path is pinned to `pg_catalog, public`.
+- Add regression checks for the definer role attributes and membership isolation; function ownership, SECURITY DEFINER flag, fixed search_path and PUBLIC execute revocation; and the intended runtime/retention/admin/dispatcher EXECUTE matrix.
+- Assert the narrow table privileges held by `qembed_definer`.
+- Exercise the retention whitelist with a hostile table argument and a SQL-looking reason string, proving that the former is rejected and the latter is stored as literal data.
+- Coverage: `tests/22_definer_security.sql`, wired into `tests/run_smoke.sh`.
+- No Rust source, migrations, or roadmap changes.
