@@ -42,6 +42,12 @@ SELECT tt.chk('SQL-011 resolver returns the explicitly delegated Caller',
  $q$SELECT EXISTS (SELECT 1 FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000001')
                     WHERE caller_id='d1120000-0000-0000-0000-000000000001'
                       AND caller_kind='Authenticated')$q$);
+SELECT tt.chk('SQL-011 resolver supports Service Caller',
+ $q$SELECT EXISTS (SELECT 1 FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000002')
+                    WHERE caller_kind='Service')$q$);
+SELECT tt.chk('SQL-011 resolver supports Anonymous Caller',
+ $q$SELECT EXISTS (SELECT 1 FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000003')
+                    WHERE caller_kind='Anonymous')$q$);
 SELECT tt.try('SQL-011 resolver rejects an undelegated Caller','err',
  $q$SELECT * FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000004')$q$);
 -- Establish a row in tenant B, then prove tenant A cannot read it.
