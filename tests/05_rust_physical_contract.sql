@@ -13,7 +13,7 @@ SELECT tt.chk('AUDIT-001 r3 table names are gone',
  $q$SELECT count(*)=0 FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','v','m')
       AND relname IN ('qembed_objects','runtime_snapshots','object_events','outbox')$q$);
 
-SELECT tt.chk('AUDIT-001/004 column contract (type, NOT NULL, default) of Rust columns',
+SELECT tt.chk('AUDIT-001/004/005 column contract (type, NOT NULL, default) of Rust columns',
  $q$WITH want(t,c,ty,nn,def) AS (VALUES
    ('objects','tenant_id','uuid',true,NULL::text),
    ('objects','object_id','uuid',true,NULL),
@@ -58,7 +58,7 @@ SELECT tt.chk('AUDIT-001/004 column contract (type, NOT NULL, default) of Rust c
    SELECT count(*)=0 FROM want w LEFT JOIN have h USING (t,c)
     WHERE h.c IS NULL OR h.ty<>w.ty OR h.nn<>w.nn OR h.def IS DISTINCT FROM w.def$q$);
 
-SELECT tt.chk('AUDIT-001 PK/UNIQUE/FK column lists match the Rust constraints',
+SELECT tt.chk('AUDIT-001/005 PK/UNIQUE/FK column lists match the Rust constraints',
  $q$WITH want(t,ty,cols,rt,rcols) AS (VALUES
    ('objects','p','tenant_id,object_id',NULL::text,NULL::text),
    ('objects','u','object_id',NULL,NULL),
@@ -88,7 +88,7 @@ SELECT tt.chk('AUDIT-001 PK/UNIQUE/FK column lists match the Rust constraints',
    SELECT count(*)=0 FROM want w WHERE NOT EXISTS (SELECT 1 FROM have h
      WHERE h.t=w.t AND h.ty=w.ty AND h.cols=w.cols AND h.rt IS NOT DISTINCT FROM w.rt AND h.rcols IS NOT DISTINCT FROM w.rcols)$q$);
 
-SELECT tt.chk('AUDIT-001 Rust FKs are ON DELETE RESTRICT, published pointer FK keeps the Rust name',
+SELECT tt.chk('AUDIT-001/005 Rust FKs are ON DELETE RESTRICT, published pointer FK keeps the Rust name',
  $q$SELECT (SELECT count(*)=4 FROM pg_constraint
              WHERE contype='f' AND confdeltype='r'
                AND conrelid::regclass::text||'->'||confrelid::regclass::text IN
