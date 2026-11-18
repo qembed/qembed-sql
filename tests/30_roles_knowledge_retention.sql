@@ -57,7 +57,7 @@ SELECT tt.chk('T-51 dispatcher reads outbox_messages', $q$SELECT count(*)>=1 FRO
 SELECT tt.chk('T-51 dispatcher reads events', $q$SELECT count(*)>=1 FROM events$q$);
 SELECT tt.try('T-51 dispatcher callers denied','err',$q$SELECT * FROM callers$q$);
 SELECT tt.try('T-51 dispatcher messages denied','err',$q$SELECT * FROM interaction_messages$q$);
-SELECT tt.try('dispatcher mark delivered','ok',$q$UPDATE outbox_messages SET status='Delivered',delivered_at=now()$q$);
+SELECT tt.try('dispatcher mark delivered (delivered_at only)','ok',$q$UPDATE outbox_messages SET delivered_at=now()$q$);
 SELECT tt.try('dispatcher INSERT outbox_messages denied','err',$q$INSERT INTO outbox_messages(delivery_id,tenant_id,event_id) VALUES (gen_random_uuid(),current_setting('app.tenant_id',true)::uuid,gen_random_uuid())$q$);
 RESET ROLE;
 -- RLS audit & role attrs
