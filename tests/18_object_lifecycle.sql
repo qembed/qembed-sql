@@ -4,6 +4,13 @@ SET client_min_messages=warning;
 
 INSERT INTO objects(tenant_id,object_id,state)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000001','draft');
+SELECT tt.try('AUDIT-007 new object cannot start Active','err',
+ $q$INSERT INTO objects(tenant_id,object_id,state,published_version_id)
+    VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000004','active','18000000-0000-0000-0000-000000000002')$q$);
+SELECT tt.try('AUDIT-007 new object version cannot start Published','err',
+ $q$INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number,status)
+    VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000005',3,'published')$q$);
+
 INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number,status)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000002',1,'draft'),
        ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000003',2,'draft');
