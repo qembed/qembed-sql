@@ -54,7 +54,7 @@ SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PU
   $q$SELECT count(*)=6 AND bool_and(
        pg_get_userbyid(proowner)='qembed_definer'
        AND prosecdef
-       AND proconfig @> ARRAY['search_path=pg_catalog, public']
+       AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
        AND NOT has_function_privilege('public',p.oid,'EXECUTE'))
        FROM pg_proc p
        WHERE pronamespace='public'::regnamespace
