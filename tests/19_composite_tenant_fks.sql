@@ -84,5 +84,5 @@ SELECT tt.try('AUDIT-008 published pointer cannot target another tenant version'
         published_version_id='19000000-0000-0000-0000-000000000002'
        WHERE tenant_id='aaaaaaaa-0000-0000-0000-000000000001'
          AND object_id='19000000-0000-0000-0000-000000000008';
-    END
+    END;
    $audit$q$);
