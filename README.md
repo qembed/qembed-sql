@@ -44,7 +44,7 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-007 ObjectVersion / object lifecycle | **применён** (строгие переходы статусов и неизменяемая identity) |
 | AUDIT-008 composite tenant FKs | **применён** (каталожная проверка и cross-tenant negative tests) |
 | AUDIT-009 Invocation lifecycle/fencing | **применён** (state machine, optimistic version и lease reclaim guard) |
-| AUDIT-010 SECURITY DEFINER hardening | **PR** (search_path, grants и injection regression tests; ожидает ревью) |
+| AUDIT-010 SECURITY DEFINER hardening | **применён** (safe search_path, grants и injection regression tests) |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -58,7 +58,7 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Остаются расхождения и расширения, закрываемые следующими аудитами (010+).
+Основные Rust-compatibility аудиты AUDIT-001…010 завершены. Дальнейшие работы перечислены в разделе **Future work** ниже; они не меняют Rust-контракты без отдельного архитектурного решения.
 
 
 ### AUDIT-002: owner authentication
@@ -133,3 +133,46 @@ Rust-репозиторий — неизменяемый источник кон
 - Exercise the retention whitelist with a hostile table argument and a SQL-looking reason string, proving that the former is rejected and the latter is stored as literal data.
 - Coverage: `tests/22_definer_security.sql`, wired into `tests/run_smoke.sh`.
 - No Rust source, migrations, or roadmap changes.
+
+
+## Future work (после AUDIT-001…010)
+
+Аудиты Rust-совместимости завершены. Следующие этапы — это отдельные проверки готовности и развитие SQL-эксплуатации; они не являются поводом менять Rust-контракты. При расхождении реализация SQL по-прежнему адаптируется к действующему Rust.
+
+### F-01. Полная матрица PostgreSQL и acceptance
+- Прогнать clean install и полный `tests/run_smoke.sh` на PostgreSQL 15 и 16 с pgvector ≥0.8.0.
+- Пройти T-01…T-64, фиксируя результат каждого acceptance-пункта: команда/сценарий, ожидаемый результат, фактический результат и ссылку на лог.
+- Отдельно подтвердить повторяемость установки с нуля и проверить schema SHA-256 после любых DDL-изменений.
+- Не объявлять SQL production-ready до закрытия обязательных acceptance-пунктов и документирования оставшихся ограничений.
+
+### F-02. Конкурентность и Invocation fencing
+- Добавить multi-session PostgreSQL tests с двумя и более независимыми соединениями: одновременный CAS одного Invocation, гонка heartbeat/reclaim, reclaim после истечения lease и попытка записи старым worker.
+- Проверить, что ровно один конкурентный переход/reclaim выигрывает, version и fencing token не теряются, а проигравший получает однозначный конфликт без частичного изменения строки.
+- Проверить поведение при rollback, разрыве соединения и повторной отправке операции.
+- Сверить наблюдаемое поведение с существующим Rust `ExecutionStore` CAS contract; Rust не менять.
+
+### F-03. Tenant lifecycle и legal hold (RT-046 / T-62)
+- Уточнить и зафиксировать SQL-модель жизненного цикла tenant: допустимые состояния, блокировка новых операций, сроки и условия окончательного удаления.
+- Определить legal hold как явный запрет удаления/очистки с проверкой во всех затрагиваемых retention/GC путях.
+- Добавить tenant-scoped negative tests: удерживаемые данные не удаляются, другой tenant не влияет на результат, снятие hold разрешает только предусмотренный lifecycle-переход.
+- Сначала согласовать точную семантику с RT-046 и T-62; не вводить новые состояния или поля по предположению.
+
+### F-04. Knowledge garbage collection (M2 / T-44)
+- Спроектировать отсутствующий DELETE/GC-путь для устаревших knowledge revisions и связанных данных.
+- До реализации определить зависимости, правила сохранения данных, retention cutoff, поведение при активных ссылках и транзакционные границы.
+- Учитывать tenant isolation, legal hold из F-03 и FK/immutability guards; удаление не должно затрагивать snapshots, events или другие данные вне согласованного GC scope.
+- Добавить dry-run/preview и проверяемую статистику кандидатов до разрешения фактического удаления.
+
+### F-05. Разбор B-01…B-09 и эксплуатационный rollout
+- Получить исходный перечень B-01…B-09 и сопоставить каждый пункт с текущей схемой, AUDIT-001…010 и T-01…T-64. Не считать их закрытыми без исходных формулировок и проверяемых доказательств.
+- Подготовить отдельный rollout/runbook: роли и секреты, порядок clean install, backup/restore, проверка RLS и grants, контроль schema checksum, мониторинг retention/outbox и процедура отката.
+- Если потребуется upgrade существующих баз, разработать отдельную upgrade migration line и тестировать её на копии реальной предыдущей схемы. Clean-install SQL не использовать как upgrade migration.
+
+### Рекомендуемый порядок
+1. **F-01** — получить воспроизводимую базовую валидацию схемы.
+2. **F-02** — закрыть конкурентные риски Invocation/CAS.
+3. **F-03** — согласовать tenant lifecycle и legal hold.
+4. **F-04** — реализовать knowledge GC на основе согласованных правил.
+5. **F-05** — сверить B-01…B-09 и подготовить rollout/upgrade документацию.
+
+Каждый этап оформлять отдельным SQL-only PR с тестами и явным evidence. До получения результатов не приписывать smoke suite, acceptance matrix или concurrency tests статус «пройдены».
