@@ -1,7 +1,7 @@
 -- SQL-011: Principal -> Caller delegation contract.
 -- The authenticated application transaction sets app.tenant_id and app.principal_id
 -- from the verified OwnerAuthenticator result; clients never supply either context.
-\\set ON_ERROR_STOP on
+\set ON_ERROR_STOP on
 SET client_min_messages=warning;
 
 INSERT INTO tenants(id) VALUES
