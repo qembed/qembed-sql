@@ -43,6 +43,14 @@ SELECT tt.try('SQL-011 duplicate active delegation rejected','err',
 SELECT tt.try('SQL-011 cross-tenant Caller cannot be delegated','err',
  $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000004')$q$);
 
+
+SELECT tt.chk('SQL-011 delegation table has ENABLE and FORCE RLS',
+ $q$SELECT c.relrowsecurity AND c.relforcerowsecurity
+       FROM pg_class c WHERE c.oid='public.principal_caller_delegations'::regclass$q$);
+SELECT tt.chk('SQL-011 runtime cannot see another tenant delegation scope',
+ $q$SELECT count(*)=0 FROM principal_caller_delegations
+      WHERE tenant_id='d1100000-0000-0000-0000-000000000002'$q$);
+
 -- A different authenticated Principal cannot revoke another Principal's grant.
 SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000002',false);
 SELECT tt.chk('SQL-011 another principal cannot revoke this delegation',
@@ -77,6 +85,26 @@ SELECT set_config('app.tenant_id','d1100000-0000-0000-0000-000000000001',false);
 SELECT set_config('app.principal_id','',false);
 SELECT tt.try('SQL-011 delegation requires authenticated principal context','err',
  $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000001')$q$);
+RESET ROLE;
+
+
+-- Delegation history cannot be rewritten or physically deleted.
+SELECT tt.try('SQL-011 revoked delegation cannot be reactivated','err',
+ $q$UPDATE principal_caller_delegations SET revoked_at=NULL, revoked_by_principal_id=NULL
+      WHERE delegation_id=current_setting('app.sql011_auth_delegation')::uuid$q$);
+SELECT tt.try('SQL-011 delegation history cannot be deleted','err',
+ $q$DELETE FROM principal_caller_delegations
+      WHERE delegation_id=current_setting('app.sql011_auth_delegation')::uuid$q$);
+
+-- Revoking a Caller makes it ineligible for future grants, even if a prior grant exists.
+UPDATE callers SET revoked_at=now()
+ WHERE tenant_id='d1100000-0000-0000-0000-000000000001'
+   AND id='d1120000-0000-0000-0000-000000000002';
+SET ROLE qembed_runtime;
+SELECT set_config('app.tenant_id','d1100000-0000-0000-0000-000000000001',false);
+SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000001',false);
+SELECT tt.try('SQL-011 revoked Caller cannot receive a new delegation','err',
+ $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000002')$q$);
 RESET ROLE;
 
 -- Disabled principals cannot create new delegations.
