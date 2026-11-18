@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `34f8cc93d1ae0a1f452e4a7945c2aae083e363321ecbb6e7174c671131b084d6`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `7f49aee2249c7e93d92a622dc3f0d1ac5156c70ef899d311c82e8c0d90e27c40`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -39,7 +39,8 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-001 физические имена/ключи | **применён** (этот патч) |
 | AUDIT-002 owner authentication | **применён** (`owner_principals`, `owner_credentials`) |
 | AUDIT-003 object state / Draft versions | **применён** (lowercase state, multiple Draft versions) |
-| AUDIT-004 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-004 snapshots | **применён** (canonical bytes, hash, JSONB projection, immutability) |
+| AUDIT-005 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -71,3 +72,11 @@ Rust-репозиторий — неизменяемый источник кон
 - `objects.state` uses the Rust lowercase vocabulary (`draft`, `validating`, `active`, `suspended`, `archived`) and defaults to `draft`.
 - The one-Draft-per-object partial unique index is removed. Multiple Draft versions may coexist; publication remains protected by the published-version uniqueness/pointer rules and the Rust repository's transactional publication path.
 - Regression coverage checks the default, rejects the legacy uppercase state, and inserts two Draft versions for one object.
+
+
+### AUDIT-004: immutable snapshots
+- The physical columns now match the Rust migration: `canonical_json BYTEA NOT NULL`, `content_hash BYTEA NOT NULL` (32 bytes), and `json_projection JSONB NOT NULL`; r3-only projection payload columns are removed.
+- `canonical_json` remains the exact RFC 8785 byte sequence and source of truth. `json_projection` is derived from those bytes and checked by a trigger (`23514`) on insert/update; it is never used to reconstruct the source.
+- Snapshot UPDATE and DELETE are rejected with SQLSTATE `55000`, matching Rust integration tests.
+- The database checks hash length, while Rust recomputes SHA-256 and validates JCS when reconstructing a snapshot. A database digest-equality CHECK is deliberately absent so corrupted persisted hashes are detected at the Rust read boundary, as tested by `snapshot_repository.rs`.
+- Regression coverage is in `tests/15_snapshots.sql`, wired into `tests/run_smoke.sh`.
