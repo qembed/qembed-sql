@@ -123,4 +123,49 @@ SELECT tt.try('AUDIT-009 terminal invocation cannot be reopened', 'err', $q$
    WHERE id='1a000000-0000-0000-0000-000000000001'
 $q$);
 
+
+-- Reserved M4 states are deliberately not enterable in the current Rust state machine.
+SELECT tt.try('AUDIT-009 Received cannot enter WaitingForInput yet', 'err', $q$
+  UPDATE object_invocations SET status='WaitingForInput', version=version+1
+   WHERE id='1a000000-0000-0000-0000-000000000001'
+$q$);
+SELECT tt.try('AUDIT-009 Received cannot enter WaitingForApproval yet', 'err', $q$
+  UPDATE object_invocations SET status='WaitingForApproval', version=version+1
+   WHERE id='1a000000-0000-0000-0000-000000000001'
+$q$);
+
+SELECT tt.try('AUDIT-009 seed invocation for Failed terminal edge', 'ok', $q$
+  INSERT INTO object_invocations
+    (id,tenant_id,object_id,caller_id,snapshot_id,knowledge_revision,pool,status,trace_id)
+  VALUES
+    ('1a000000-0000-0000-0000-00000000000a',
+     current_setting('app.tenant_id')::uuid,
+     '0b000000-0000-0000-0000-000000000001',
+     'ca000000-0000-0000-0000-000000000001',
+     '5a000000-0000-0000-0000-000000000001',
+     0,'authenticated','Received',gen_random_uuid())
+$q$);
+SELECT tt.try('AUDIT-009 any nonterminal state may transition to Failed', 'ok', $q$
+  UPDATE object_invocations
+     SET status='Failed', error_code='worker_failure', finished_at=now(), version=version+1
+   WHERE id='1a000000-0000-0000-0000-00000000000a'
+$q$);
+
+SELECT tt.try('AUDIT-009 seed invocation for Cancelled terminal edge', 'ok', $q$
+  INSERT INTO object_invocations
+    (id,tenant_id,object_id,caller_id,snapshot_id,knowledge_revision,pool,status,trace_id)
+  VALUES
+    ('1a000000-0000-0000-0000-00000000000b',
+     current_setting('app.tenant_id')::uuid,
+     '0b000000-0000-0000-0000-000000000001',
+     'ca000000-0000-0000-0000-000000000001',
+     '5a000000-0000-0000-0000-000000000001',
+     0,'authenticated','Received',gen_random_uuid())
+$q$);
+SELECT tt.try('AUDIT-009 any nonterminal state may transition to Cancelled', 'ok', $q$
+  UPDATE object_invocations
+     SET status='Cancelled', finished_at=now(), version=version+1
+   WHERE id='1a000000-0000-0000-0000-00000000000b'
+$q$);
+
 RESET ROLE;
