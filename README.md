@@ -1,11 +1,11 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `aa58b1d327877f7c642a1f78942725b3dd345dd2f19a262895b48504e558e482`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `ec34893aafcd69f7a05e9713be64de5faa4c2d86ee73bc421cbbd42146012885`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
-- `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`.
+- `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40; `05_rust_physical_contract.sql` — контракт физических имён/ключей Rust). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`.
 - `Qembed_Object_Runtime_M0_v2_3_3_FINAL_TZ.pdf`, `Qembed_M0_v2_3_3_Diagrams.pdf` — **не пересобирались, содержимое r1**. Нормативны `.md` (addendum r3 имеет приоритет по §1); PDF с addendum r1 устарел в части §9–§10.
 
 ## Что исправлено в r3 (SQL)
@@ -30,3 +30,27 @@
 ## Start coding
 Архитектура заморожена для M1a (addendum §7–§8, RT-047). SQL — candidate до прохождения T-01…T-64 на PG 15/16 × pgvector ≥0.8.0. Внешние write-tools не включать до T-07, T-22, T-38, T-46, T-47, T-52, T-59, T-64.
 Порядок публикации версии в репозитории: supersede старой → publish новой → перенос `published_version_id` в одной транзакции.
+
+## Rust-compat remediation (backlog `sql_remediation_backlog_rust_compatibility.md`)
+Rust-репозиторий — неизменяемый источник контрактов; адаптируется только SQL.
+
+| Audit | Статус |
+|---|---|
+| AUDIT-001 физические имена/ключи | **применён** (этот патч) |
+| AUDIT-002 … AUDIT-010 | не применены, отдельные патчи |
+
+### AUDIT-001: единый путь установки (миграционная линия)
+- Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
+- Rust SQLx-миграции `20261118000000…03_*.sql` **не применяются поверх** этой схемы: они создают те же таблицы
+  (`objects`, `object_versions`, `snapshots`, `events`, `outbox_messages`) и дали бы конфликт. Rust migration runner
+  явный (не запускается при подключении), поэтому на базе, установленной этим скриптом, его просто не вызывают.
+- Физические имена и ключи пяти таблиц совпадают с Rust (проверяется `tests/05_rust_physical_contract.sql`):
+  `objects(tenant_id, object_id)`, `object_versions(tenant_id, object_id, object_version_id)`,
+  `snapshots(tenant_id, snapshot_id)`, `events(tenant_id, event_id)`, `outbox_messages(tenant_id, delivery_id)`.
+- `objects.tenant_id` без FK на `tenants`: Rust-путь не создаёт строк `tenants`.
+- Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
+- `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
+
+Остаются расхождения, закрываемые следующими аудитами: значения `objects.state` и индекс одной Draft-версии (003),
+`snapshots.json_projection` и обязательные projection-колонки (004), состав колонок `events`/`outbox_messages` (005),
+owner-таблицы (002).

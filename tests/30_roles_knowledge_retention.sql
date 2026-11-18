@@ -15,7 +15,7 @@ SELECT tt.chk('authenticate_principal', $q$SELECT count(*)=1 FROM authenticate_p
 SELECT tt.try('resolve_object_tenant','ok',$q$SELECT resolve_object_tenant('0b000000-0000-0000-0000-000000000001')$q$);
 SELECT tt.try('list_expired_invocation_leases','ok',$q$SELECT * FROM list_expired_invocation_leases(10)$q$);
 SELECT tt.try('list_pending_reconciliations','ok',$q$SELECT * FROM list_pending_reconciliations(10)$q$);
-SELECT tt.try('T-54 runtime cannot call retention_purge','err',$q$SELECT retention_purge('outbox',now(),'x')$q$);
+SELECT tt.try('T-54 runtime cannot call retention_purge','err',$q$SELECT retention_purge('outbox_messages',now(),'x')$q$);
 -- sweeper
 SELECT tt.chk('sweeper expires 1', $q$SELECT sweep_expired_reservations(10)=1$q$);
 SELECT tt.chk('T-40 sweeper idempotent', $q$SELECT sweep_expired_reservations(10)=0$q$);
@@ -43,8 +43,8 @@ SELECT tt.try('R3-03 runtime cannot nullify terminal output directly','err',$q$U
 RESET ROLE;
 -- retention role
 SET ROLE qembed_retention;
-SELECT tt.try('T-61 retention events not allowed','err',$q$SELECT retention_purge('object_events',now(),'x')$q$);
-SELECT tt.try('T-61 retention snapshots not allowed','err',$q$SELECT retention_purge('runtime_snapshots',now(),'x')$q$);
+SELECT tt.try('T-61 retention events not allowed','err',$q$SELECT retention_purge('events',now(),'x')$q$);
+SELECT tt.try('T-61 retention snapshots not allowed','err',$q$SELECT retention_purge('snapshots',now(),'x')$q$);
 SELECT tt.try('retention interaction_messages','ok',$q$SELECT retention_purge('interaction_messages',now(),'ttl')$q$);
 SELECT tt.try('R3-03 retention nullifies output of terminal tool_execution','ok',$q$SELECT retention_purge('tool_executions',now(),'ttl')$q$);
 SELECT tt.try('retention memories','ok',$q$SELECT retention_purge('memories',now()+interval '1 year','ttl')$q$);
@@ -53,12 +53,12 @@ RESET ROLE;
 SELECT tt.chk('R3-03 output NULL, row still Succeeded', $q$SELECT output IS NULL AND status='Succeeded' FROM tool_executions WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
 -- dispatcher
 SET ROLE qembed_dispatcher;
-SELECT tt.chk('T-51 dispatcher reads outbox', $q$SELECT count(*)>=1 FROM outbox$q$);
-SELECT tt.chk('T-51 dispatcher reads events', $q$SELECT count(*)>=1 FROM object_events$q$);
+SELECT tt.chk('T-51 dispatcher reads outbox_messages', $q$SELECT count(*)>=1 FROM outbox_messages$q$);
+SELECT tt.chk('T-51 dispatcher reads events', $q$SELECT count(*)>=1 FROM events$q$);
 SELECT tt.try('T-51 dispatcher callers denied','err',$q$SELECT * FROM callers$q$);
 SELECT tt.try('T-51 dispatcher messages denied','err',$q$SELECT * FROM interaction_messages$q$);
-SELECT tt.try('dispatcher mark delivered','ok',$q$UPDATE outbox SET status='Delivered',delivered_at=now()$q$);
-SELECT tt.try('dispatcher INSERT outbox denied','err',$q$INSERT INTO outbox(id,tenant_id,event_id) VALUES (gen_random_uuid(),current_setting('app.tenant_id',true)::uuid,gen_random_uuid())$q$);
+SELECT tt.try('dispatcher mark delivered','ok',$q$UPDATE outbox_messages SET status='Delivered',delivered_at=now()$q$);
+SELECT tt.try('dispatcher INSERT outbox_messages denied','err',$q$INSERT INTO outbox_messages(delivery_id,tenant_id,event_id) VALUES (gen_random_uuid(),current_setting('app.tenant_id',true)::uuid,gen_random_uuid())$q$);
 RESET ROLE;
 -- RLS audit & role attrs
 SELECT tt.chk('T-54 role attrs', $q$SELECT count(*)=0 FROM pg_roles WHERE rolname LIKE 'qembed_%' AND rolname<>'qembed_migrator' AND (rolsuper OR rolbypassrls OR rolcanlogin)$q$);

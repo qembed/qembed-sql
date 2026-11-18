@@ -8,14 +8,14 @@ SELECT tt.try('callers','ok',$q$INSERT INTO callers(id,tenant_id,token_hash,call
  ('ca000000-0000-0000-0000-000000000002',current_setting('app.tenant_id')::uuid,'\x12','Anonymous')$q$);
 -- snapshot
 CREATE TEMP TABLE sj AS SELECT convert_to('{"budget_snapshot":{"d":1},"capabilities":{},"config":{"k":2},"context_config":{},"policy_version":"p1","schema_version":1,"tool_bindings":[]}','UTF8') AS b;
-SELECT tt.try('snapshot insert ok','ok',$q$INSERT INTO runtime_snapshots(id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
+SELECT tt.try('snapshot insert ok','ok',$q$INSERT INTO snapshots(snapshot_id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
  SELECT '5a000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest(b,'sha256'),'{"k":2}','{}','[]','{"d":1}','{}','p1' FROM sj$q$);
-SELECT tt.try('snapshot bad hash','err',$q$INSERT INTO runtime_snapshots(id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
+SELECT tt.try('snapshot bad hash','err',$q$INSERT INTO snapshots(snapshot_id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
  SELECT gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest('x','sha256'),'{"k":2}','{}','[]','{"d":1}','{}','p1' FROM sj$q$);
-SELECT tt.try('snapshot projection mismatch','err',$q$INSERT INTO runtime_snapshots(id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
+SELECT tt.try('snapshot projection mismatch','err',$q$INSERT INTO snapshots(snapshot_id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
  SELECT gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest(b,'sha256'),'{"k":3}','{}','[]','{"d":1}','{}','p1' FROM sj$q$);
-SELECT tt.try('snapshot UPDATE denied','err',$q$UPDATE runtime_snapshots SET policy_version='x'$q$);
-SELECT tt.try('snapshot DELETE denied','err',$q$DELETE FROM runtime_snapshots$q$);
+SELECT tt.try('snapshot UPDATE denied','err',$q$UPDATE snapshots SET policy_version='x'$q$);
+SELECT tt.try('snapshot DELETE denied','err',$q$DELETE FROM snapshots$q$);
 -- budgets
 SELECT tt.try('budget row','ok',$q$INSERT INTO object_budgets VALUES (current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001',1000000,1000000,50,100000,5,5,5,10000,60000)$q$);
 SELECT tt.try('usage counter rows','ok',$q$INSERT INTO usage_counters(tenant_id,object_id,usage_date,pool,reserved_tokens,reserved_cost_micros) VALUES (current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001',current_date,'authenticated',500,500)$q$);
@@ -28,14 +28,14 @@ SELECT tt.try('BEGIN invocation txn','ok',$q$
    VALUES ('1a000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000001','5a000000-0000-0000-0000-000000000001',0,'authenticated','Received',gen_random_uuid());
  INSERT INTO budget_reservations(id,tenant_id,object_id,invocation_id,pool,usage_date,reserved_tokens,reserved_cost_micros,status,expires_at)
    VALUES ('b1000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','1a000000-0000-0000-0000-000000000001','authenticated',current_date,500,500,'Reserved',now()-interval '1 minute');
- INSERT INTO object_events(id,tenant_id,object_id,stream_type,stream_id,stream_version,event_type,payload)
+ INSERT INTO events(event_id,tenant_id,object_id,stream_type,stream_id,stream_version,event_type,payload)
    VALUES ('e1000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','invocation','1a000000-0000-0000-0000-000000000001',1,'InvocationReceived','{}');
- INSERT INTO outbox(id,tenant_id,event_id) VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'e1000000-0000-0000-0000-000000000001')$q$);
+ INSERT INTO outbox_messages(delivery_id,tenant_id,event_id) VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'e1000000-0000-0000-0000-000000000001')$q$);
 SELECT tt.try('T-06 dup idempotency key','err',$q$INSERT INTO invocation_idempotency(tenant_id,object_id,caller_id,idempotency_key,payload_hash,invocation_id,expires_at) VALUES (current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000001','k1','\x00','1a000000-0000-0000-0000-000000000001',now()+interval '1 day')$q$);
-SELECT tt.try('T-29 stream_version dup','err',$q$INSERT INTO object_events(id,tenant_id,object_id,stream_type,stream_id,stream_version,event_type,payload) VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','invocation','1a000000-0000-0000-0000-000000000001',1,'x','{}')$q$);
+SELECT tt.try('T-29 stream_version dup','err',$q$INSERT INTO events(event_id,tenant_id,object_id,stream_type,stream_id,stream_version,event_type,payload) VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','invocation','1a000000-0000-0000-0000-000000000001',1,'x','{}')$q$);
 SELECT tt.try('T-42 message caller mismatch','err',$q$INSERT INTO interaction_messages(id,tenant_id,object_id,caller_id,invocation_id,role,content,expires_at) VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000002','1a000000-0000-0000-0000-000000000001','user','hi',now()+interval '1 day')$q$);
 SELECT tt.try('message ok (expired for purge)','ok',$q$INSERT INTO interaction_messages(id,tenant_id,object_id,caller_id,invocation_id,role,content,expires_at) VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000001','1a000000-0000-0000-0000-000000000001','user','hi',now()-interval '1 day')$q$);
-SELECT tt.try('T-09 events UPDATE denied','err',$q$UPDATE object_events SET event_type='y'$q$);
+SELECT tt.try('T-09 events UPDATE denied','err',$q$UPDATE events SET event_type='y'$q$);
 -- memory
 SELECT tt.try('candidate semantic User/Unverified','ok',$q$INSERT INTO memories(id,tenant_id,object_id,memory_kind,claim,source_kind,verification,confidence) VALUES ('de000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','semantic','c','User','Unverified',0.5)$q$);
 SELECT tt.try('T-60 UPDATE candidate->Verified denied','err',$q$UPDATE memories SET verification='Verified',source_kind='Owner',verified_by='22222222-0000-0000-0000-00000000000a',verified_at=now() WHERE id='de000000-0000-0000-0000-000000000001'$q$);
