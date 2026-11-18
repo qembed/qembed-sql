@@ -1,0 +1,1178 @@
+-- =============================================================================
+-- Qembed Object Runtime — M0 v2.3.3 CLEAN SCHEMA CANDIDATE r3 (fresh install only)
+-- PostgreSQL 15+, pgvector >= 0.8. Apply as qembed_migrator (table owner).
+-- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
+-- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
+-- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
+-- =============================================================================
+\set ON_ERROR_STOP on
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- pgvector gate (r1): fail fast below 0.8.0 (hnsw.iterative_scan, addendum §5).
+-- Local smoke only: SET qembed.allow_old_pgvector = 'on'. Never in CI/prod.
+DO $$
+DECLARE v TEXT; parts INT[];
+BEGIN
+  SELECT extversion INTO v FROM pg_extension WHERE extname = 'vector';
+  IF v IS NULL THEN RAISE EXCEPTION 'pgvector is not installed'; END IF;
+  parts := string_to_array(regexp_replace(v, '[^0-9.]', '', 'g'), '.')::int[];
+  IF (parts[1], coalesce(parts[2],0)) < (0, 8) THEN
+    IF coalesce(current_setting('qembed.allow_old_pgvector', true), 'off') = 'on' THEN
+      RAISE WARNING 'pgvector % < 0.8.0: smoke-test only, NOT a compliant environment', v;
+    ELSE
+      RAISE EXCEPTION 'pgvector % is below the required minimum 0.8.0', v;
+    END IF;
+  END IF;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 0. Roles (NOLOGIN here; credentials are provisioned out of band)
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE r TEXT;
+BEGIN
+  FOREACH r IN ARRAY ARRAY['qembed_runtime','qembed_dispatcher','qembed_admin',
+                           'qembed_retention','qembed_definer']
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+      EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS', r);
+    END IF;
+  END LOOP;
+END $$;
+-- qembed_definer: NOLOGIN owner of SECURITY DEFINER functions (A2). Subject to
+-- RLS; sees data only through explicit policies defined in section 20.
+
+-- -----------------------------------------------------------------------------
+-- 1. Guards
+-- -----------------------------------------------------------------------------
+CREATE FUNCTION forbid_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION '% is append-only (% forbidden)', TG_TABLE_NAME, TG_OP;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 2. Global registries
+-- -----------------------------------------------------------------------------
+CREATE TABLE embedding_models (
+  id TEXT PRIMARY KEY, provider TEXT NOT NULL, model_name TEXT NOT NULL,
+  dimension INTEGER NOT NULL CHECK (dimension > 0),
+  distance_metric TEXT NOT NULL CHECK (distance_metric IN ('cosine','l2','ip')),
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE tool_definitions (
+  id UUID PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE tool_versions (
+  id UUID PRIMARY KEY, tool_id UUID NOT NULL REFERENCES tool_definitions(id),
+  version TEXT NOT NULL,
+  risk_level TEXT NOT NULL CHECK (risk_level IN ('R0','R1','R2','R3','R4')),
+  input_schema JSONB NOT NULL, output_schema JSONB NOT NULL,
+  timeout_ms INTEGER NOT NULL CHECK (timeout_ms > 0),
+  idempotent BOOLEAN NOT NULL,
+  -- M0/M1: write-capable tools without upstream idempotency are forbidden
+  CHECK (risk_level IN ('R0','R1') OR idempotent),
+  UNIQUE (tool_id, version), UNIQUE (tool_id, id)
+);
+
+-- -----------------------------------------------------------------------------
+-- 3. Tenants, principals
+-- -----------------------------------------------------------------------------
+CREATE TABLE tenants (
+  id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE principals (   -- restricted-global: tenant_id NULL only for PlatformAdmin
+  id UUID PRIMARY KEY, tenant_id UUID REFERENCES tenants(id),
+  kind TEXT NOT NULL CHECK (kind IN ('TenantOwner','TenantAdmin','Service','PlatformAdmin')),
+  key_hash BYTEA NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), revoked_at TIMESTAMPTZ,
+  CHECK ((kind = 'PlatformAdmin') = (tenant_id IS NULL)),
+  UNIQUE (tenant_id, id)
+);
+
+-- -----------------------------------------------------------------------------
+-- 4. Objects and versions
+-- -----------------------------------------------------------------------------
+CREATE TABLE qembed_objects (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES tenants(id),
+  state TEXT NOT NULL CHECK (state IN ('Draft','Validating','Active','Suspended','Archived')),
+  published_version_id UUID,
+  binding_counter BIGINT NOT NULL DEFAULT 0 CHECK (binding_counter >= 0), -- A9
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (state NOT IN ('Active','Suspended') OR published_version_id IS NOT NULL),
+  UNIQUE (tenant_id, id)
+);
+
+CREATE TABLE object_versions (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  version_number BIGINT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','superseded')),
+  config JSONB NOT NULL, chat_model_ref TEXT NOT NULL,
+  embedding_model_id TEXT NOT NULL REFERENCES embedding_models(id),
+  published_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((status = 'draft') = (published_at IS NULL)),
+  UNIQUE (tenant_id, object_id, version_number),
+  UNIQUE (tenant_id, object_id, id),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+CREATE UNIQUE INDEX uq_ov_one_draft ON object_versions (tenant_id, object_id) WHERE status = 'draft';
+CREATE UNIQUE INDEX uq_ov_one_published ON object_versions (tenant_id, object_id) WHERE status = 'published';
+
+ALTER TABLE qembed_objects
+  ADD FOREIGN KEY (tenant_id, id, published_version_id)
+  REFERENCES object_versions(tenant_id, object_id, id) DEFERRABLE INITIALLY DEFERRED;
+
+CREATE FUNCTION object_versions_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.status <> 'draft' THEN RAISE EXCEPTION 'published version is immutable'; END IF;
+    RETURN OLD;
+  END IF;
+  IF OLD.status <> 'draft' THEN
+    IF OLD.status = 'published' AND NEW.status = 'superseded' AND
+       (NEW.id, NEW.tenant_id, NEW.object_id, NEW.config, NEW.chat_model_ref,
+        NEW.embedding_model_id, NEW.version_number, NEW.published_at, NEW.created_at)
+       IS NOT DISTINCT FROM
+       (OLD.id, OLD.tenant_id, OLD.object_id, OLD.config, OLD.chat_model_ref,
+        OLD.embedding_model_id, OLD.version_number, OLD.published_at, OLD.created_at)
+    THEN RETURN NEW; END IF;
+    RAISE EXCEPTION 'published version is immutable';
+  END IF;
+  IF NEW.status = 'superseded' THEN RAISE EXCEPTION 'invalid transition'; END IF;
+  IF (NEW.id, NEW.tenant_id, NEW.object_id) IS DISTINCT FROM (OLD.id, OLD.tenant_id, OLD.object_id)
+  THEN RAISE EXCEPTION 'identity columns are immutable'; END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_object_versions_guard BEFORE UPDATE OR DELETE ON object_versions
+  FOR EACH ROW EXECUTE FUNCTION object_versions_guard();
+
+-- -----------------------------------------------------------------------------
+-- 5. Callers
+-- -----------------------------------------------------------------------------
+CREATE TABLE callers (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES tenants(id),
+  token_hash BYTEA NOT NULL,
+  caller_kind TEXT NOT NULL CHECK (caller_kind IN ('Anonymous','Authenticated','Service')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), revoked_at TIMESTAMPTZ,
+  UNIQUE (tenant_id, token_hash), UNIQUE (tenant_id, id)
+);
+
+-- -----------------------------------------------------------------------------
+-- 6. Snapshots (A4): canonical_json is the source of truth for the hash
+-- -----------------------------------------------------------------------------
+CREATE TABLE runtime_snapshots (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  object_version_id UUID NOT NULL,
+  schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+  canonical_json BYTEA NOT NULL,                       -- RFC 8785 JCS, UTF-8
+  content_hash BYTEA NOT NULL CHECK (octet_length(content_hash) = 32),
+  config JSONB NOT NULL, capabilities JSONB NOT NULL, tool_bindings JSONB NOT NULL,
+  budget_snapshot JSONB NOT NULL, context_config JSONB NOT NULL,
+  policy_version TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (content_hash = digest(canonical_json, 'sha256')) ,
+  UNIQUE (tenant_id, object_id, content_hash),
+  UNIQUE (tenant_id, object_id, id),
+  FOREIGN KEY (tenant_id, object_id, object_version_id)
+    REFERENCES object_versions(tenant_id, object_id, id)
+);
+
+-- -----------------------------------------------------------------------------
+-- 7. Invocations (lease + fencing), idempotency, messages
+-- -----------------------------------------------------------------------------
+CREATE TABLE object_invocations (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL, caller_id UUID NOT NULL,
+  snapshot_id UUID NOT NULL, knowledge_revision BIGINT NOT NULL CHECK (knowledge_revision >= 0),
+  pool TEXT NOT NULL CHECK (pool IN ('anonymous','authenticated')),
+  status TEXT NOT NULL CHECK (status IN
+    ('Received','ContextLoading','Processing','ExecutingTool','Verifying',
+     'WaitingForInput','WaitingForApproval',
+     'Completed','CompletedDegraded','Failed','Cancelled')),
+  error_code TEXT, degraded_reason TEXT, trace_id UUID NOT NULL,
+  cancel_requested_at TIMESTAMPTZ,
+  lease_owner TEXT, lease_until TIMESTAMPTZ, heartbeat_at TIMESTAMPTZ,
+  fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ,
+  version BIGINT NOT NULL DEFAULT 0,
+  CHECK ((status IN ('Completed','CompletedDegraded','Failed','Cancelled')) = (finished_at IS NOT NULL)),
+  CHECK (status <> 'Failed' OR error_code IS NOT NULL),
+  CHECK (status <> 'CompletedDegraded' OR degraded_reason IS NOT NULL),
+  CHECK ((lease_owner IS NULL) = (lease_until IS NULL)),
+  CHECK (finished_at IS NULL OR lease_owner IS NULL),
+  UNIQUE (tenant_id, object_id, id),
+  UNIQUE (tenant_id, object_id, caller_id, id),          -- A6
+  UNIQUE (tenant_id, object_id, id, pool),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id),
+  FOREIGN KEY (tenant_id, caller_id) REFERENCES callers(tenant_id, id),
+  FOREIGN KEY (tenant_id, object_id, snapshot_id) REFERENCES runtime_snapshots(tenant_id, object_id, id)
+);
+CREATE INDEX idx_inv_active ON object_invocations (tenant_id, object_id)
+  WHERE status NOT IN ('Completed','CompletedDegraded','Failed','Cancelled');
+CREATE INDEX idx_inv_lease ON object_invocations (lease_until)
+  WHERE status NOT IN ('Completed','CompletedDegraded','Failed','Cancelled');
+
+CREATE TABLE invocation_idempotency (
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, caller_id UUID NOT NULL,
+  idempotency_key TEXT NOT NULL, payload_hash BYTEA NOT NULL, invocation_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (tenant_id, object_id, caller_id, idempotency_key),
+  UNIQUE (tenant_id, object_id, invocation_id),
+  FOREIGN KEY (tenant_id, object_id, caller_id, invocation_id)
+    REFERENCES object_invocations(tenant_id, object_id, caller_id, id)
+    DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE interaction_messages (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL, caller_id UUID NOT NULL,
+  invocation_id UUID NOT NULL, role TEXT NOT NULL CHECK (role IN ('user','assistant','tool')),
+  content TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  FOREIGN KEY (tenant_id, object_id, caller_id, invocation_id)
+    REFERENCES object_invocations(tenant_id, object_id, caller_id, id)
+);
+CREATE INDEX idx_msg_caller ON interaction_messages (tenant_id, caller_id);
+CREATE INDEX idx_msg_expiry ON interaction_messages (expires_at);
+
+-- -----------------------------------------------------------------------------
+-- 8. Knowledge
+-- -----------------------------------------------------------------------------
+CREATE TABLE knowledge_revisions (
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  current_revision BIGINT NOT NULL DEFAULT 0 CHECK (current_revision >= 0),
+  PRIMARY KEY (tenant_id, object_id),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+CREATE TABLE knowledge_revision_log (      -- B1: basis for the reproducibility window
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, revision BIGINT NOT NULL CHECK (revision > 0),
+  committed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, object_id, revision),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+
+CREATE FUNCTION objects_init_knowledge() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO knowledge_revisions (tenant_id, object_id) VALUES (NEW.tenant_id, NEW.id);
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_objects_init_knowledge AFTER INSERT ON qembed_objects
+  FOR EACH ROW EXECUTE FUNCTION objects_init_knowledge();
+
+CREATE TABLE knowledge_documents (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  doc_key TEXT NOT NULL, title TEXT NOT NULL, source_uri TEXT,
+  trusted BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL CHECK (status IN ('staged','indexed','live','retired','erased')),
+  valid_from_revision BIGINT, valid_to_revision BIGINT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (valid_to_revision IS NULL OR (valid_from_revision IS NOT NULL AND valid_to_revision > valid_from_revision)),
+  CHECK (status NOT IN ('staged','indexed') OR valid_from_revision IS NULL),
+  CHECK (status <> 'live' OR (valid_from_revision IS NOT NULL AND valid_to_revision IS NULL)),
+  CHECK (status <> 'retired' OR valid_to_revision IS NOT NULL),
+  UNIQUE (tenant_id, object_id, id),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+CREATE UNIQUE INDEX uq_doc_live ON knowledge_documents (tenant_id, object_id, doc_key)
+  WHERE valid_from_revision IS NOT NULL AND valid_to_revision IS NULL;
+
+CREATE TABLE knowledge_chunks (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL, document_id UUID NOT NULL,
+  content TEXT NOT NULL, erased BOOLEAN NOT NULL DEFAULT false,
+  position INTEGER NOT NULL, metadata JSONB NOT NULL DEFAULT '{}',
+  valid_from_revision BIGINT, valid_to_revision BIGINT,
+  content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
+  CHECK (valid_to_revision IS NULL OR (valid_from_revision IS NOT NULL AND valid_to_revision > valid_from_revision)),
+  CHECK (NOT erased OR content = ''),
+  UNIQUE (tenant_id, object_id, id),
+  FOREIGN KEY (tenant_id, object_id, document_id)
+    REFERENCES knowledge_documents(tenant_id, object_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_chunks_visible ON knowledge_chunks (tenant_id, object_id, valid_from_revision, valid_to_revision);
+CREATE INDEX idx_chunks_fts ON knowledge_chunks USING gin (content_tsv);
+
+CREATE FUNCTION knowledge_chunks_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (NEW.id, NEW.tenant_id, NEW.object_id, NEW.document_id, NEW.position, NEW.metadata)
+     IS DISTINCT FROM (OLD.id, OLD.tenant_id, OLD.object_id, OLD.document_id, OLD.position, OLD.metadata)
+  THEN RAISE EXCEPTION 'chunk is immutable'; END IF;
+  IF NEW.content IS DISTINCT FROM OLD.content AND NOT (NEW.erased AND NOT OLD.erased)
+  THEN RAISE EXCEPTION 'chunk content is immutable (only erasure allowed)'; END IF;
+  IF (NEW.valid_from_revision, NEW.valid_to_revision) IS DISTINCT FROM (OLD.valid_from_revision, OLD.valid_to_revision)
+     AND coalesce(current_setting('qembed.interval_sync', true), '') <> 'on'
+  THEN RAISE EXCEPTION 'chunk interval is changed only by revision commit'; END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_chunks_guard BEFORE UPDATE ON knowledge_chunks
+  FOR EACH ROW EXECUTE FUNCTION knowledge_chunks_guard();
+
+CREATE FUNCTION knowledge_documents_sync() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM set_config('qembed.interval_sync', 'on', true);
+  UPDATE knowledge_chunks
+     SET valid_from_revision = NEW.valid_from_revision, valid_to_revision = NEW.valid_to_revision
+   WHERE tenant_id = NEW.tenant_id AND object_id = NEW.object_id AND document_id = NEW.id;
+  PERFORM set_config('qembed.interval_sync', 'off', true);
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_docs_sync AFTER UPDATE OF valid_from_revision, valid_to_revision ON knowledge_documents
+  FOR EACH ROW EXECUTE FUNCTION knowledge_documents_sync();
+
+CREATE TABLE knowledge_chunk_embeddings (
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, chunk_id UUID NOT NULL,
+  model_id TEXT NOT NULL REFERENCES embedding_models(id),
+  embedding vector NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, chunk_id, model_id),
+  FOREIGN KEY (tenant_id, object_id, chunk_id)
+    REFERENCES knowledge_chunks(tenant_id, object_id, id) ON DELETE CASCADE
+);
+
+CREATE FUNCTION check_embedding_dim() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE d INTEGER;
+BEGIN
+  SELECT dimension INTO d FROM embedding_models WHERE id = NEW.model_id;
+  IF d IS NULL OR vector_dims(NEW.embedding) <> d THEN
+    RAISE EXCEPTION 'embedding dimension mismatch for model %', NEW.model_id;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_kce_dim BEFORE INSERT OR UPDATE OF embedding, model_id
+  ON knowledge_chunk_embeddings FOR EACH ROW EXECUTE FUNCTION check_embedding_dim();
+-- HNSW partial expression indexes are created per model by migrator,
+-- CREATE INDEX CONCURRENTLY outside this transaction (see runbook; halfvec for dim > 2000).
+
+-- -----------------------------------------------------------------------------
+-- 9. Memory
+-- -----------------------------------------------------------------------------
+CREATE TABLE memories (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL, caller_id UUID,
+  memory_kind TEXT NOT NULL CHECK (memory_kind IN ('semantic','episodic')),
+  claim TEXT NOT NULL,
+  source_kind TEXT NOT NULL CHECK (source_kind IN
+    ('Owner','TrustedDocument','User','ThirdParty','Tool','RuntimeInference')),
+  verification TEXT NOT NULL CHECK (verification IN ('Unverified','Verified','Observed','Rejected')),
+  confidence REAL NOT NULL CHECK (confidence BETWEEN 0 AND 1),
+  source_id UUID, invocation_id UUID, supersedes_id UUID,
+  verified_by UUID, verified_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((memory_kind = 'episodic') = (caller_id IS NOT NULL)),
+  CHECK (memory_kind = 'semantic' OR expires_at IS NOT NULL),
+  CHECK (memory_kind = 'semantic' OR verification <> 'Verified'),
+  CHECK (verification <> 'Verified' OR (source_kind IN ('Owner','TrustedDocument')
+         AND verified_by IS NOT NULL AND verified_at IS NOT NULL)),
+  CHECK (verification <> 'Observed' OR source_kind = 'Tool'),
+  CHECK (source_kind NOT IN ('User','ThirdParty','RuntimeInference') OR verification IN ('Unverified','Rejected')),
+  UNIQUE (tenant_id, object_id, id),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id),
+  FOREIGN KEY (tenant_id, caller_id) REFERENCES callers(tenant_id, id),
+  FOREIGN KEY (tenant_id, verified_by) REFERENCES principals(tenant_id, id),
+  FOREIGN KEY (tenant_id, object_id, invocation_id) REFERENCES object_invocations(tenant_id, object_id, id),
+  FOREIGN KEY (tenant_id, object_id, supersedes_id) REFERENCES memories(tenant_id, object_id, id)
+    ON DELETE SET NULL (supersedes_id)
+);
+CREATE INDEX idx_mem_caller ON memories (tenant_id, object_id, caller_id);
+
+-- A10: a Verified record is authored by the owner. Owner approval of a User/ThirdParty
+-- candidate creates a NEW record (source_kind='Owner', supersedes_id -> candidate).
+CREATE FUNCTION memories_verified_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE k TEXT;
+BEGIN
+  IF NEW.verification = 'Verified' THEN
+    SELECT kind INTO k FROM principals WHERE tenant_id = NEW.tenant_id AND id = NEW.verified_by;
+    IF k IS NULL OR k NOT IN ('TenantOwner','TenantAdmin') THEN
+      RAISE EXCEPTION 'Verified requires an owner/admin principal';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_memories_verified BEFORE INSERT OR UPDATE ON memories
+  FOR EACH ROW EXECUTE FUNCTION memories_verified_guard();
+
+CREATE TABLE memory_conflicts (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  memory_id UUID NOT NULL, conflicting_memory_id UUID NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open','resolved')), resolution JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (memory_id <> conflicting_memory_id),
+  CHECK ((status = 'resolved') = (resolution IS NOT NULL)),
+  FOREIGN KEY (tenant_id, object_id, memory_id) REFERENCES memories(tenant_id, object_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, object_id, conflicting_memory_id) REFERENCES memories(tenant_id, object_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE memory_embeddings (
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, memory_id UUID NOT NULL,
+  model_id TEXT NOT NULL REFERENCES embedding_models(id),
+  embedding vector NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, memory_id, model_id),
+  FOREIGN KEY (tenant_id, object_id, memory_id) REFERENCES memories(tenant_id, object_id, id) ON DELETE CASCADE
+);
+CREATE TRIGGER trg_me_dim BEFORE INSERT OR UPDATE OF embedding, model_id
+  ON memory_embeddings FOR EACH ROW EXECUTE FUNCTION check_embedding_dim();
+
+-- -----------------------------------------------------------------------------
+-- 10. Tool bindings (A9), policy decisions (A5, A6), command payloads, executions (A7)
+-- -----------------------------------------------------------------------------
+CREATE TABLE object_tools (
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, tool_id UUID NOT NULL,
+  tool_version_id UUID NOT NULL, permissions JSONB NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  binding_version BIGINT NOT NULL CHECK (binding_version > 0),
+  PRIMARY KEY (tenant_id, object_id, tool_id),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id),
+  FOREIGN KEY (tool_id, tool_version_id) REFERENCES tool_versions(tool_id, id)
+);
+
+-- binding_version comes from the per-object counter: strictly monotonic,
+-- never reused. DELETE is forbidden (soft-disable via enabled=false).
+CREATE FUNCTION object_tools_bump() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v BIGINT;
+BEGIN
+  IF TG_OP = 'UPDATE' AND (NEW.tool_version_id, NEW.permissions, NEW.enabled)
+     IS NOT DISTINCT FROM (OLD.tool_version_id, OLD.permissions, OLD.enabled) THEN
+    NEW.binding_version := OLD.binding_version;
+    RETURN NEW;
+  END IF;
+  UPDATE qembed_objects SET binding_counter = binding_counter + 1
+   WHERE tenant_id = NEW.tenant_id AND id = NEW.object_id
+   RETURNING binding_counter INTO v;
+  IF v IS NULL THEN RAISE EXCEPTION 'object not found for binding'; END IF;
+  NEW.binding_version := v;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_object_tools_bump BEFORE INSERT OR UPDATE ON object_tools
+  FOR EACH ROW EXECUTE FUNCTION object_tools_bump();
+CREATE TRIGGER trg_object_tools_nodelete BEFORE DELETE OR TRUNCATE ON object_tools
+  FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation();
+
+CREATE TABLE policy_decisions (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  invocation_id UUID NOT NULL, caller_id UUID NOT NULL, snapshot_id UUID NOT NULL,
+  tool_id UUID NOT NULL, tool_version_id UUID, binding_version BIGINT,
+  operation TEXT NOT NULL, arguments_hash BYTEA NOT NULL CHECK (octet_length(arguments_hash) = 32),
+  action_hash BYTEA NOT NULL CHECK (octet_length(action_hash) = 32),
+  risk_level TEXT NOT NULL CHECK (risk_level IN ('R0','R1','R2','R3','R4')),
+  decision TEXT NOT NULL CHECK (decision IN ('Allow','Deny')), reason TEXT,
+  policy_version TEXT NOT NULL,
+  command_id UUID, issued_at TIMESTAMPTZ, expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (decision <> 'Allow' OR (command_id IS NOT NULL AND expires_at IS NOT NULL
+         AND issued_at IS NOT NULL AND tool_version_id IS NOT NULL AND binding_version IS NOT NULL)),
+  CHECK (decision <> 'Deny' OR command_id IS NULL),
+  UNIQUE (tenant_id, object_id, id),
+  UNIQUE (tenant_id, object_id, invocation_id, id),
+  UNIQUE (tenant_id, object_id, invocation_id, id, decision),
+  UNIQUE (tenant_id, command_id),
+  FOREIGN KEY (tenant_id, object_id, caller_id, invocation_id)
+    REFERENCES object_invocations(tenant_id, object_id, caller_id, id),
+  FOREIGN KEY (tenant_id, object_id, snapshot_id) REFERENCES runtime_snapshots(tenant_id, object_id, id),
+  FOREIGN KEY (tool_id, tool_version_id) REFERENCES tool_versions(tool_id, id)
+);
+
+-- Short-lived protected payload store (never in events/decisions). Encrypted
+-- by the application (envelope encryption); deleted at terminal state/TTL.
+CREATE TABLE tool_command_payloads (
+  tenant_id UUID NOT NULL, command_id UUID NOT NULL,
+  payload_ciphertext BYTEA NOT NULL, key_id TEXT NOT NULL,
+  arguments_hash BYTEA NOT NULL CHECK (octet_length(arguments_hash) = 32),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (tenant_id, command_id),
+  FOREIGN KEY (tenant_id, command_id) REFERENCES policy_decisions(tenant_id, command_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_tcp_expiry ON tool_command_payloads (expires_at);
+
+CREATE TABLE tool_executions (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  invocation_id UUID NOT NULL, caller_id UUID NOT NULL,
+  decision_id UUID NOT NULL, decision TEXT NOT NULL DEFAULT 'Allow' CHECK (decision = 'Allow'),
+  command_id UUID NOT NULL, tool_id UUID NOT NULL, tool_version_id UUID NOT NULL,
+  snapshot_id UUID NOT NULL, binding_version BIGINT NOT NULL, operation TEXT NOT NULL,
+  arguments_hash BYTEA NOT NULL CHECK (octet_length(arguments_hash) = 32),
+  status TEXT NOT NULL CHECK (status IN ('Authorized','Executing','Succeeded','Failed','Unknown')),
+  lease_owner TEXT, lease_until TIMESTAMPTZ,
+  fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
+  external_idempotency_key TEXT,
+  reconciliation_state TEXT CHECK (reconciliation_state IN
+    ('pending','confirmed_succeeded','confirmed_failed','manual')),
+  output JSONB, output_expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ,
+  CHECK (output IS NULL OR output_expires_at IS NOT NULL OR status = 'Failed'),
+  CHECK ((status IN ('Succeeded','Failed')) = (finished_at IS NOT NULL)),
+  CHECK (status <> 'Unknown' OR reconciliation_state IS NOT NULL),
+  CHECK ((lease_owner IS NULL) = (lease_until IS NULL)),
+  UNIQUE (tenant_id, command_id),
+  UNIQUE (tenant_id, decision_id),
+  FOREIGN KEY (tenant_id, object_id, invocation_id, decision_id, decision)
+    REFERENCES policy_decisions(tenant_id, object_id, invocation_id, id, decision),
+  FOREIGN KEY (tenant_id, command_id) REFERENCES policy_decisions(tenant_id, command_id),
+  FOREIGN KEY (tenant_id, object_id, caller_id, invocation_id)
+    REFERENCES object_invocations(tenant_id, object_id, caller_id, id),
+  FOREIGN KEY (tool_id, tool_version_id) REFERENCES tool_versions(tool_id, id)
+);
+CREATE INDEX idx_te_unknown ON tool_executions (tenant_id) WHERE status = 'Unknown';
+CREATE INDEX idx_te_lease ON tool_executions (lease_until) WHERE status = 'Executing';
+
+-- -----------------------------------------------------------------------------
+-- 11. Events and outbox (A6: tenant-consistent FK)
+-- -----------------------------------------------------------------------------
+CREATE TABLE object_events (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  stream_type TEXT NOT NULL CHECK (stream_type IN ('object','invocation','task','knowledge')),
+  stream_id UUID NOT NULL, stream_version BIGINT NOT NULL CHECK (stream_version > 0),
+  event_type TEXT NOT NULL, payload JSONB NOT NULL,
+  pii_class TEXT NOT NULL DEFAULT 'none' CHECK (pii_class = 'none'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, stream_type, stream_id, stream_version),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+CREATE INDEX idx_events_object_time ON object_events (tenant_id, object_id, created_at);
+
+CREATE TABLE outbox (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, event_id UUID NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending','Delivered','Dead')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  locked_until TIMESTAMPTZ, delivered_at TIMESTAMPTZ, last_error TEXT,
+  UNIQUE (tenant_id, event_id),
+  FOREIGN KEY (tenant_id, event_id) REFERENCES object_events(tenant_id, id)
+);
+CREATE INDEX idx_outbox_pending ON outbox (available_at) WHERE status = 'Pending';
+
+-- -----------------------------------------------------------------------------
+-- 12. Budgets, usage, rate limits, kill switches
+-- -----------------------------------------------------------------------------
+CREATE TABLE object_budgets (
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  daily_token_limit BIGINT NOT NULL CHECK (daily_token_limit >= 0),
+  daily_cost_limit_micros BIGINT NOT NULL CHECK (daily_cost_limit_micros >= 0),
+  anonymous_share_pct SMALLINT NOT NULL DEFAULT 50 CHECK (anonymous_share_pct BETWEEN 0 AND 100),
+  per_caller_daily_token_limit BIGINT NOT NULL CHECK (per_caller_daily_token_limit >= 0),
+  max_concurrent_invocations INTEGER NOT NULL CHECK (max_concurrent_invocations > 0),
+  max_llm_calls INTEGER NOT NULL CHECK (max_llm_calls > 0),
+  max_tool_calls INTEGER NOT NULL CHECK (max_tool_calls >= 0),
+  max_tokens_per_invocation BIGINT NOT NULL CHECK (max_tokens_per_invocation > 0),
+  max_duration_ms INTEGER NOT NULL CHECK (max_duration_ms > 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, object_id),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+
+CREATE TABLE budget_reservations (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL, invocation_id UUID NOT NULL,
+  pool TEXT NOT NULL CHECK (pool IN ('anonymous','authenticated')),
+  usage_date DATE NOT NULL,   -- UTC date of reservation; used by settlement/sweeper
+  reserved_tokens BIGINT NOT NULL CHECK (reserved_tokens >= 0),
+  reserved_cost_micros BIGINT NOT NULL CHECK (reserved_cost_micros >= 0),
+  actual_tokens BIGINT CHECK (actual_tokens >= 0), actual_cost_micros BIGINT CHECK (actual_cost_micros >= 0),
+  status TEXT NOT NULL CHECK (status IN ('Reserved','Settled','Released','Expired')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (tenant_id, object_id, invocation_id),
+  FOREIGN KEY (tenant_id, object_id, invocation_id, pool)   -- pool must match the invocation
+    REFERENCES object_invocations(tenant_id, object_id, id, pool) DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX idx_resv_sweep ON budget_reservations (expires_at) WHERE status = 'Reserved';
+
+CREATE TABLE usage_counters (
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, usage_date DATE NOT NULL,
+  pool TEXT NOT NULL CHECK (pool IN ('anonymous','authenticated')),
+  consumed_tokens BIGINT NOT NULL DEFAULT 0 CHECK (consumed_tokens >= 0),
+  consumed_cost_micros BIGINT NOT NULL DEFAULT 0 CHECK (consumed_cost_micros >= 0),
+  reserved_tokens BIGINT NOT NULL DEFAULT 0 CHECK (reserved_tokens >= 0),
+  reserved_cost_micros BIGINT NOT NULL DEFAULT 0 CHECK (reserved_cost_micros >= 0),
+  PRIMARY KEY (tenant_id, object_id, usage_date, pool),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+
+CREATE TABLE caller_usage_counters (   -- per-caller daily tokens (B17)
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, caller_id UUID NOT NULL, usage_date DATE NOT NULL,
+  consumed_tokens BIGINT NOT NULL DEFAULT 0 CHECK (consumed_tokens >= 0),
+  reserved_tokens BIGINT NOT NULL DEFAULT 0 CHECK (reserved_tokens >= 0),
+  PRIMARY KEY (tenant_id, object_id, caller_id, usage_date),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id),
+  FOREIGN KEY (tenant_id, caller_id) REFERENCES callers(tenant_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE budget_event_dedup (   -- budget_exhausted: at most once per day per object+budget type
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, budget_type TEXT NOT NULL, usage_date DATE NOT NULL,
+  PRIMARY KEY (tenant_id, object_id, budget_type, usage_date),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+
+CREATE TABLE rate_limit_buckets (   -- global, server-built keys
+  bucket_key TEXT PRIMARY KEY, tokens NUMERIC NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL, policy_version TEXT NOT NULL
+);
+CREATE INDEX idx_rl_cleanup ON rate_limit_buckets (updated_at);
+
+CREATE TABLE kill_switches (   -- restricted-global: tenant_id NULL for platform / global tool
+  id UUID PRIMARY KEY,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('platform','tenant','object','tool')),
+  tenant_id UUID REFERENCES tenants(id), object_id UUID, tool_id UUID REFERENCES tool_definitions(id),
+  enabled BOOLEAN NOT NULL, reason TEXT, changed_by TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((scope_type = 'platform' AND tenant_id IS NULL AND object_id IS NULL AND tool_id IS NULL)
+      OR (scope_type = 'tenant'   AND tenant_id IS NOT NULL AND object_id IS NULL AND tool_id IS NULL)
+      OR (scope_type = 'object'   AND tenant_id IS NOT NULL AND object_id IS NOT NULL AND tool_id IS NULL)
+      OR (scope_type = 'tool'     AND tool_id IS NOT NULL AND object_id IS NULL)),
+  UNIQUE NULLS NOT DISTINCT (scope_type, tenant_id, object_id, tool_id),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+
+-- -----------------------------------------------------------------------------
+-- 13. Goals/tasks (M4 contracts), deletion, retention
+-- -----------------------------------------------------------------------------
+CREATE TABLE object_goals (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL,
+  description TEXT NOT NULL, priority SMALLINT NOT NULL, status TEXT NOT NULL,
+  constraints JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, object_id, id),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id)
+);
+CREATE TABLE object_tasks (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL, goal_id UUID,
+  status TEXT NOT NULL, checkpoint JSONB, lease_owner TEXT, lease_until TIMESTAMPTZ,
+  fencing_token BIGINT NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+  deadline TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  FOREIGN KEY (tenant_id, object_id) REFERENCES qembed_objects(tenant_id, id),
+  FOREIGN KEY (tenant_id, object_id, goal_id) REFERENCES object_goals(tenant_id, object_id, id)
+);
+
+CREATE TABLE deletion_jobs (
+  id UUID PRIMARY KEY, tenant_id UUID NOT NULL, caller_id UUID NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('Pending','Running','Done','Failed')),
+  progress JSONB NOT NULL DEFAULT '{}', requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  FOREIGN KEY (tenant_id, caller_id) REFERENCES callers(tenant_id, id)
+);
+CREATE UNIQUE INDEX uq_deletion_active ON deletion_jobs (tenant_id, caller_id)
+  WHERE status IN ('Pending','Running');
+
+CREATE TABLE deletion_ledger (
+  tenant_id UUID NOT NULL, caller_hash BYTEA NOT NULL, deleted_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (tenant_id, caller_hash)
+);
+CREATE TABLE retention_log (   -- no tenant_id: privileges only, no tenant policy
+  id BIGSERIAL PRIMARY KEY, table_name TEXT NOT NULL, rows_affected BIGINT NOT NULL,
+  reason TEXT NOT NULL, executed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- -----------------------------------------------------------------------------
+-- 14. Append-only enforcement (UPDATE/DELETE/TRUNCATE) on immutable tables
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['runtime_snapshots','object_events','policy_decisions'] LOOP
+    EXECUTE format('CREATE TRIGGER trg_%s_append_only BEFORE UPDATE OR DELETE ON %I
+                    FOR EACH ROW EXECUTE FUNCTION forbid_mutation()', t, t);
+    EXECUTE format('CREATE TRIGGER trg_%s_no_truncate BEFORE TRUNCATE ON %I
+                    FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation()', t, t);
+  END LOOP;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 15. RLS (A1): classification + ENABLE/FORCE on every table
+-- -----------------------------------------------------------------------------
+-- tenant-owned: tenant_id NOT NULL, policy by app.tenant_id
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'qembed_objects','object_versions','callers','runtime_snapshots','object_invocations',
+    'invocation_idempotency','interaction_messages','knowledge_revisions','knowledge_revision_log',
+    'knowledge_documents','knowledge_chunks','knowledge_chunk_embeddings','memories',
+    'memory_conflicts','memory_embeddings','object_tools','policy_decisions',
+    'tool_command_payloads','tool_executions','object_events','outbox','object_budgets',
+    'budget_reservations','usage_counters','caller_usage_counters','budget_event_dedup',
+    'object_goals','object_tasks','deletion_jobs','deletion_ledger']
+  LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format($p$CREATE POLICY tenant_isolation ON %I TO qembed_runtime
+      USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+      WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)$p$, t);
+  END LOOP;
+END $$;
+
+-- restricted-global tables with explicit policies
+ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;      ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
+ALTER TABLE principals ENABLE ROW LEVEL SECURITY;   ALTER TABLE principals FORCE ROW LEVEL SECURITY;
+ALTER TABLE kill_switches ENABLE ROW LEVEL SECURITY; ALTER TABLE kill_switches FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY own_tenant ON tenants FOR SELECT TO qembed_runtime
+  USING (id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY admin_all ON tenants TO qembed_admin USING (true) WITH CHECK (true);
+
+CREATE POLICY own_tenant ON principals FOR SELECT TO qembed_runtime
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY admin_all ON principals TO qembed_admin USING (true) WITH CHECK (true);
+CREATE POLICY definer_auth ON principals FOR SELECT TO qembed_definer USING (true);
+
+CREATE POLICY ks_read ON kill_switches FOR SELECT TO qembed_runtime
+  USING (tenant_id IS NULL OR tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY ks_write ON kill_switches FOR ALL TO qembed_runtime
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY ks_admin ON kill_switches TO qembed_admin USING (true) WITH CHECK (true);
+
+-- dispatcher: delivery only
+CREATE POLICY disp_outbox ON outbox TO qembed_dispatcher USING (true) WITH CHECK (true);
+CREATE POLICY disp_events ON object_events FOR SELECT TO qembed_dispatcher USING (true);
+
+-- definer role (owner of SECURITY DEFINER functions): only the tables their bodies touch
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['qembed_objects','object_invocations','budget_reservations',
+      'usage_counters','caller_usage_counters','tool_executions','tool_command_payloads',
+      'interaction_messages','memories','invocation_idempotency','outbox'] LOOP
+    EXECUTE format('CREATE POLICY definer_access ON %I TO qembed_definer USING (true) WITH CHECK (true)', t);
+  END LOOP;
+END $$;
+
+-- admin: tenant provisioning needs to create the initial tenant rows
+CREATE POLICY admin_objects ON qembed_objects TO qembed_admin USING (true) WITH CHECK (true);
+-- r3 (R3-06): trg_objects_init_knowledge runs as the inserting role; admin object
+-- provisioning failed with 42501 on knowledge_revisions.
+CREATE POLICY admin_knowledge_revisions ON knowledge_revisions FOR SELECT TO qembed_admin USING (true);
+CREATE POLICY admin_knowledge_revisions_ins ON knowledge_revisions FOR INSERT TO qembed_admin WITH CHECK (current_revision = 0);
+
+-- -----------------------------------------------------------------------------
+-- 16. SECURITY DEFINER functions (owner qembed_definer; fixed search_path)
+-- -----------------------------------------------------------------------------
+CREATE FUNCTION authenticate_principal(p_key_hash BYTEA)
+RETURNS TABLE (principal_id UUID, tenant_id UUID, kind TEXT)
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+  SELECT id, tenant_id, kind FROM principals WHERE key_hash = p_key_hash AND revoked_at IS NULL
+$$;
+
+CREATE FUNCTION resolve_object_tenant(p_object_id UUID)
+RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+  SELECT tenant_id FROM qembed_objects WHERE id = p_object_id
+$$;
+
+-- Cross-tenant discovery for background workers (A3): returns identifiers only;
+-- the worker then acts under the proper Scope (SET LOCAL app.tenant_id).
+CREATE FUNCTION list_expired_invocation_leases(p_limit INT)
+RETURNS TABLE (tenant_id UUID, invocation_id UUID, fencing_token BIGINT)
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+  SELECT tenant_id, id, fencing_token FROM object_invocations
+   WHERE lease_until < now()
+     AND status NOT IN ('Completed','CompletedDegraded','Failed','Cancelled')
+   ORDER BY lease_until LIMIT p_limit
+$$;
+
+CREATE FUNCTION list_pending_reconciliations(p_limit INT)
+RETURNS TABLE (tenant_id UUID, execution_id UUID)
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+  SELECT tenant_id, id FROM tool_executions
+   WHERE (status = 'Unknown' AND reconciliation_state = 'pending')
+      OR (status = 'Executing' AND lease_until < now())
+   LIMIT p_limit
+$$;
+
+-- Idempotent sweeper (T-40)
+CREATE FUNCTION sweep_expired_reservations(p_limit INT) RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE r RECORD; n INT := 0;
+BEGIN
+  FOR r IN SELECT * FROM budget_reservations
+            WHERE status = 'Reserved' AND expires_at < now()
+            ORDER BY expires_at LIMIT p_limit FOR UPDATE SKIP LOCKED
+  LOOP
+    UPDATE budget_reservations SET status = 'Expired' WHERE id = r.id AND status = 'Reserved';
+    UPDATE usage_counters
+       SET reserved_tokens = reserved_tokens - r.reserved_tokens,
+           reserved_cost_micros = reserved_cost_micros - r.reserved_cost_micros
+     WHERE tenant_id = r.tenant_id AND object_id = r.object_id
+       AND usage_date = r.usage_date AND pool = r.pool;
+    -- r3 (R3-04): per-caller reserved tokens were never released on expiry
+    UPDATE caller_usage_counters c
+       SET reserved_tokens = greatest(0, c.reserved_tokens - r.reserved_tokens)
+      FROM object_invocations i
+     WHERE i.tenant_id = r.tenant_id AND i.object_id = r.object_id AND i.id = r.invocation_id
+       AND c.tenant_id = i.tenant_id AND c.object_id = i.object_id
+       AND c.caller_id = i.caller_id AND c.usage_date = r.usage_date;
+    n := n + 1;
+  END LOOP;
+  RETURN n;
+END $$;
+
+-- Retention: fixed whitelist, per-table action (A8). Append-only tables are NOT purgeable here.
+CREATE FUNCTION retention_purge(p_table TEXT, p_cutoff TIMESTAMPTZ, p_reason TEXT) RETURNS BIGINT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE n BIGINT;
+BEGIN
+  IF p_table = 'interaction_messages' THEN
+    DELETE FROM interaction_messages WHERE expires_at < p_cutoff;
+  ELSIF p_table = 'memories' THEN
+    DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < p_cutoff;
+  ELSIF p_table = 'invocation_idempotency' THEN
+    DELETE FROM invocation_idempotency WHERE expires_at < p_cutoff;
+  ELSIF p_table = 'tool_command_payloads' THEN
+    DELETE FROM tool_command_payloads WHERE expires_at < p_cutoff;
+  ELSIF p_table = 'outbox' THEN
+    DELETE FROM outbox WHERE status IN ('Delivered','Dead') AND coalesce(delivered_at, available_at) < p_cutoff;
+  ELSIF p_table = 'tool_executions' THEN   -- nullify output, keep the audit row
+    UPDATE tool_executions SET output = NULL, output_expires_at = NULL
+     WHERE output IS NOT NULL AND output_expires_at < p_cutoff;
+  ELSE
+    RAISE EXCEPTION 'table not allowed';
+  END IF;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  INSERT INTO retention_log (table_name, rows_affected, reason) VALUES (p_table, n, p_reason);
+  RETURN n;
+END $$;
+
+-- ownership: functions must be owned by qembed_definer
+DO $$
+DECLARE f TEXT;
+BEGIN
+  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','resolve_object_tenant(uuid)',
+     'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
+     'sweep_expired_reservations(integer)','retention_purge(text,timestamptz,text)'] LOOP
+    EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
+  END LOOP;
+END $$;
+
+-- -----------------------------------------------------------------------------
+-- 17. Grants (least privilege)
+-- -----------------------------------------------------------------------------
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
+
+-- runtime
+GRANT SELECT ON embedding_models, tool_definitions, tool_versions, tenants, principals, kill_switches TO qembed_runtime;
+GRANT SELECT, INSERT, UPDATE ON
+  qembed_objects, object_versions, callers, object_invocations, invocation_idempotency,
+  interaction_messages, knowledge_revisions, knowledge_documents, knowledge_chunks,
+  knowledge_chunk_embeddings, memories, memory_conflicts, memory_embeddings, object_tools,
+  tool_command_payloads, tool_executions, outbox, object_budgets, budget_reservations,
+  usage_counters, caller_usage_counters, budget_event_dedup, object_goals, object_tasks,
+  deletion_jobs TO qembed_runtime;
+GRANT INSERT, SELECT ON knowledge_revision_log, runtime_snapshots, policy_decisions, object_events,
+  deletion_ledger TO qembed_runtime;                                    -- append-only: no UPDATE
+GRANT INSERT, UPDATE, DELETE ON kill_switches TO qembed_runtime;
+GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddings,
+  knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
+GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), resolve_object_tenant(uuid),
+  list_expired_invocation_leases(integer), list_pending_reconciliations(integer),
+  sweep_expired_reservations(integer) TO qembed_runtime;
+
+-- dispatcher: only delivery
+GRANT SELECT ON object_events TO qembed_dispatcher;
+GRANT SELECT, UPDATE ON outbox TO qembed_dispatcher;
+
+-- admin
+GRANT SELECT, INSERT, UPDATE ON tenants, principals, kill_switches, qembed_objects,
+  embedding_models, tool_definitions, tool_versions TO qembed_admin;
+GRANT SELECT, INSERT ON knowledge_revisions TO qembed_admin;          -- r3 (R3-06)
+
+-- retention
+GRANT EXECUTE ON FUNCTION retention_purge(text,timestamptz,text) TO qembed_retention;
+
+-- definer: privileges needed by function bodies (narrow to column grants in review)
+GRANT SELECT ON principals, qembed_objects, object_invocations TO qembed_definer;
+GRANT SELECT, UPDATE ON budget_reservations, usage_counters, tool_executions TO qembed_definer;
+GRANT SELECT, DELETE ON interaction_messages, memories, invocation_idempotency,
+  tool_command_payloads, outbox TO qembed_definer;
+GRANT SELECT, UPDATE ON caller_usage_counters TO qembed_definer;   -- r3: sweeper releases per-caller reservations
+GRANT INSERT ON retention_log TO qembed_definer;
+GRANT USAGE, SELECT ON SEQUENCE retention_log_id_seq TO qembed_definer;
+
+-- -----------------------------------------------------------------------------
+-- 18. Migration audit: fail if any public table lacks RLS/FORCE, outside the allowlist
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE bad TEXT;
+BEGIN
+  SELECT string_agg(c.relname, ', ') INTO bad
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind IN ('r','p')
+     AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
+     AND c.relname NOT IN ('embedding_models','tool_definitions','tool_versions',
+                           'rate_limit_buckets','retention_log');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'RLS/FORCE missing on: %', bad; END IF;
+END $$;
+
+
+-- =============================================================================
+-- v2.3.3 finalization guards (RT-039..RT-046)
+-- These guards close claim-integrity holes found in the v2.3.2 static review.
+-- They do NOT replace Rust-side RFC 8785/JCS canonicalization.
+-- =============================================================================
+
+-- RT-039: the hash is over canonical bytes. The JSONB projections must decode
+-- from those same bytes; JCS byte-canonicality is verified in Rust before INSERT.
+CREATE FUNCTION runtime_snapshot_projection_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE j JSONB;
+BEGIN
+  IF digest(NEW.canonical_json, 'sha256') IS DISTINCT FROM NEW.content_hash THEN
+    RAISE EXCEPTION 'snapshot content hash mismatch';
+  END IF;
+  BEGIN
+    j := convert_from(NEW.canonical_json, 'UTF8')::jsonb;
+  EXCEPTION WHEN others THEN
+    RAISE EXCEPTION 'canonical_json must be valid UTF-8 JSON';
+  END;
+  IF (j->'config') IS DISTINCT FROM NEW.config
+     OR (j->'capabilities') IS DISTINCT FROM NEW.capabilities
+     OR (j->'tool_bindings') IS DISTINCT FROM NEW.tool_bindings
+     OR (j->'budget_snapshot') IS DISTINCT FROM NEW.budget_snapshot
+     OR (j->'context_config') IS DISTINCT FROM NEW.context_config
+     OR (j->>'schema_version') IS DISTINCT FROM NEW.schema_version::text
+     OR (j->>'policy_version') IS DISTINCT FROM NEW.policy_version THEN
+    RAISE EXCEPTION 'snapshot JSONB projections do not match canonical_json';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_snapshot_projection_guard
+  BEFORE INSERT ON runtime_snapshots FOR EACH ROW
+  EXECUTE FUNCTION runtime_snapshot_projection_guard();
+
+-- A policy decision must pin the same snapshot/caller as its invocation.
+CREATE FUNCTION policy_decision_invocation_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE i object_invocations%ROWTYPE;
+BEGIN
+  SELECT * INTO i FROM object_invocations
+   WHERE tenant_id=NEW.tenant_id AND object_id=NEW.object_id AND id=NEW.invocation_id;
+  IF NOT FOUND OR (i.caller_id,i.snapshot_id) IS DISTINCT FROM (NEW.caller_id,NEW.snapshot_id) THEN
+    RAISE EXCEPTION 'policy decision claims differ from invocation';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_policy_decision_invocation_guard
+  BEFORE INSERT ON policy_decisions FOR EACH ROW
+  EXECUTE FUNCTION policy_decision_invocation_guard();
+
+-- A published version cannot be superseded while the object still points to it (checked at COMMIT, r3).
+CREATE OR REPLACE FUNCTION object_versions_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.status <> 'draft' THEN RAISE EXCEPTION 'published version is immutable'; END IF;
+    RETURN OLD;
+  END IF;
+  IF OLD.status <> 'draft' THEN
+    IF OLD.status = 'published' AND NEW.status = 'superseded' AND
+       (NEW.id, NEW.tenant_id, NEW.object_id, NEW.config, NEW.chat_model_ref,
+        NEW.embedding_model_id, NEW.version_number, NEW.published_at, NEW.created_at)
+       IS NOT DISTINCT FROM
+       (OLD.id, OLD.tenant_id, OLD.object_id, OLD.config, OLD.chat_model_ref,
+        OLD.embedding_model_id, OLD.version_number, OLD.published_at, OLD.created_at)
+    THEN
+      -- r3 (R3-01): the pointer check is DEFERRED to COMMIT (constraint trigger below);
+      -- an immediate check made re-publication impossible (uq_ov_one_published forbids
+      -- two published rows, the pointer cannot move before the new row is published).
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'published version is immutable';
+  END IF;
+  IF NEW.status = 'superseded' THEN RAISE EXCEPTION 'invalid transition'; END IF;
+  IF (NEW.id, NEW.tenant_id, NEW.object_id) IS DISTINCT FROM (OLD.id, OLD.tenant_id, OLD.object_id)
+  THEN RAISE EXCEPTION 'identity columns are immutable'; END IF;
+  RETURN NEW;
+END $$;
+
+-- r3 (R3-01): deferred pointer check. Re-publication transaction order:
+--   1) UPDATE old version  published -> superseded
+--   2) UPDATE new version  draft     -> published
+--   3) UPDATE qembed_objects SET published_version_id = <new>
+-- At COMMIT no object may still point to a superseded version.
+CREATE FUNCTION object_version_superseded_pointer_check() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM qembed_objects o WHERE o.tenant_id = NEW.tenant_id
+             AND o.id = NEW.object_id AND o.published_version_id = NEW.id) THEN
+    RAISE EXCEPTION 'cannot supersede the currently published object version (pointer not moved before COMMIT)';
+  END IF;
+  RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER trg_ov_superseded_pointer_check
+  AFTER UPDATE ON object_versions DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (OLD.status = 'published' AND NEW.status = 'superseded')
+  EXECUTE FUNCTION object_version_superseded_pointer_check();
+
+-- RT-040: a tool execution must be an exact projection of the Allow decision,
+-- not merely share its decision_id/command_id. This includes all scope claims.
+CREATE FUNCTION tool_execution_claims_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE d policy_decisions%ROWTYPE;
+BEGIN
+  SELECT * INTO d FROM policy_decisions
+   WHERE tenant_id=NEW.tenant_id AND id=NEW.decision_id;
+  IF NOT FOUND OR d.decision <> 'Allow'
+     OR (d.tenant_id,d.object_id,d.invocation_id,d.caller_id,d.snapshot_id,
+         d.tool_id,d.tool_version_id,d.binding_version,d.operation,d.arguments_hash,d.command_id)
+        IS DISTINCT FROM
+        (NEW.tenant_id,NEW.object_id,NEW.invocation_id,NEW.caller_id,NEW.snapshot_id,
+         NEW.tool_id,NEW.tool_version_id,NEW.binding_version,NEW.operation,NEW.arguments_hash,NEW.command_id) THEN
+    RAISE EXCEPTION 'tool execution claims differ from Allow decision';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_tool_execution_claims_guard
+  BEFORE INSERT OR UPDATE OF tenant_id,object_id,invocation_id,caller_id,decision_id,
+    command_id,tool_id,tool_version_id,snapshot_id,binding_version,operation,arguments_hash,decision
+  ON tool_executions FOR EACH ROW EXECUTE FUNCTION tool_execution_claims_guard();
+
+-- RT-043: payload bytes are bound to the exact Allow decision arguments hash.
+CREATE FUNCTION tool_payload_hash_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE h BYTEA;
+BEGIN
+  SELECT arguments_hash INTO h FROM policy_decisions
+   WHERE tenant_id=NEW.tenant_id AND command_id=NEW.command_id AND decision='Allow';
+  IF h IS NULL OR h IS DISTINCT FROM NEW.arguments_hash THEN
+    RAISE EXCEPTION 'command payload hash differs from Allow decision';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_tool_payload_hash_guard
+  BEFORE INSERT OR UPDATE OF tenant_id,command_id,arguments_hash ON tool_command_payloads
+  FOR EACH ROW EXECUTE FUNCTION tool_payload_hash_guard();
+
+-- RT-044: Verified is created as a NEW Owner-authored row. An UPDATE may not
+-- promote an existing candidate or mutate an already verified record.
+CREATE OR REPLACE FUNCTION memories_verified_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE k TEXT;
+BEGIN
+  IF TG_OP='UPDATE' THEN
+    IF OLD.verification='Verified' THEN
+      -- r3 (R3-02): the only permitted change is the referential action
+      -- ON DELETE SET NULL (supersedes_id) fired by deleting the superseded candidate.
+      -- pg_trigger_depth() > 1 means we run inside the RI trigger, not a direct UPDATE.
+      IF pg_trigger_depth() > 1 AND OLD.supersedes_id IS NOT NULL AND NEW.supersedes_id IS NULL
+         AND (to_jsonb(NEW) - 'supersedes_id') = (to_jsonb(OLD) - 'supersedes_id') THEN
+        RETURN NEW;
+      END IF;
+      RAISE EXCEPTION 'verified memory is immutable';
+    END IF;
+    IF NEW.verification='Verified' THEN
+      RAISE EXCEPTION 'verification requires a new Owner memory row';
+    END IF;
+  END IF;
+  IF NEW.verification='Verified' THEN
+    IF NEW.source_kind <> 'Owner' OR NEW.supersedes_id IS NULL
+       OR NEW.verified_by IS NULL OR NEW.verified_at IS NULL THEN
+      RAISE EXCEPTION 'Verified requires a new Owner row superseding a candidate';
+    END IF;
+    SELECT kind INTO k FROM principals WHERE tenant_id=NEW.tenant_id AND id=NEW.verified_by;
+    IF k IS DISTINCT FROM 'TenantOwner' THEN
+      RAISE EXCEPTION 'Verified requires TenantOwner principal';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+
+-- RT-046: object pointer may reference only a published version belonging to
+-- the same tenant/object. DEFERRABLE FK remains for transactional publication.
+CREATE FUNCTION object_published_pointer_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE st TEXT;
+BEGIN
+  IF NEW.published_version_id IS NULL THEN
+    IF NEW.state IN ('Active','Suspended') THEN RAISE EXCEPTION 'active object requires published version'; END IF;
+    RETURN NEW;
+  END IF;
+  SELECT status INTO st FROM object_versions
+   WHERE tenant_id=NEW.tenant_id AND object_id=NEW.id AND id=NEW.published_version_id;
+  IF st IS DISTINCT FROM 'published' THEN
+    RAISE EXCEPTION 'published_version_id must point to a published version';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_object_published_pointer_guard
+  BEFORE INSERT OR UPDATE OF state,published_version_id,tenant_id,id ON qembed_objects
+  FOR EACH ROW EXECUTE FUNCTION object_published_pointer_guard();
+
+-- Knowledge chunks cannot be inserted with invented active intervals. A chunk
+-- created for staged/indexed docs is interval-free; live/retired docs must match.
+CREATE FUNCTION knowledge_chunk_interval_insert_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE d knowledge_documents%ROWTYPE;
+BEGIN
+  SELECT * INTO d FROM knowledge_documents
+   WHERE tenant_id=NEW.tenant_id AND object_id=NEW.object_id AND id=NEW.document_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'knowledge document not found'; END IF;
+  IF d.status IN ('staged','indexed') THEN
+    IF NEW.valid_from_revision IS NOT NULL OR NEW.valid_to_revision IS NOT NULL THEN
+      RAISE EXCEPTION 'staged/indexed document chunks must have NULL revision interval';
+    END IF;
+  ELSIF (NEW.valid_from_revision,NEW.valid_to_revision) IS DISTINCT FROM
+        (d.valid_from_revision,d.valid_to_revision) THEN
+    RAISE EXCEPTION 'chunk interval must match parent document';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_knowledge_chunk_interval_insert_guard
+  BEFORE INSERT ON knowledge_chunks FOR EACH ROW
+  EXECUTE FUNCTION knowledge_chunk_interval_insert_guard();
+
+-- Tool execution state transition guard. Fencing-token equality is required for
+-- state mutation; lease acquisition must increment the token in a separate
+-- atomic UPDATE ... WHERE current token = expected token statement.
+CREATE FUNCTION tool_execution_state_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF OLD.status IN ('Succeeded','Failed') THEN
+    -- r3 (R3-03): retention_purge (SECURITY DEFINER, owner qembed_definer) may only
+    -- NULL out output/output_expires_at of a terminal row; everything else is frozen.
+    IF current_user = 'qembed_definer'
+       AND NEW.output IS NULL AND NEW.output_expires_at IS NULL
+       AND (to_jsonb(NEW) - 'output' - 'output_expires_at')
+         = (to_jsonb(OLD) - 'output' - 'output_expires_at') THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'terminal tool execution is immutable';
+  END IF;
+  IF NEW.fencing_token < OLD.fencing_token THEN
+    RAISE EXCEPTION 'stale fencing token';
+  END IF;
+  -- The repository must CAS on the token observed at claim time. Completion
+  -- uses that same current token; reclaim increments it in a separate claim UPDATE.
+  IF OLD.status IS DISTINCT FROM NEW.status AND NOT (
+       (OLD.status='Authorized' AND NEW.status IN ('Executing','Failed')) OR
+       (OLD.status='Executing' AND NEW.status IN ('Succeeded','Failed','Unknown')) OR
+       (OLD.status='Unknown' AND NEW.status IN ('Succeeded','Failed'))
+     ) THEN
+    RAISE EXCEPTION 'invalid tool execution state transition: % -> %', OLD.status, NEW.status;
+  END IF;
+  -- r3 (R3-05): NULL reconciliation_state used to slip through (NULL NOT IN (...) is NULL)
+  IF OLD.status='Unknown' AND NEW.status IN ('Succeeded','Failed')
+     AND (NEW.reconciliation_state IS NULL
+          OR NEW.reconciliation_state NOT IN ('confirmed_succeeded','confirmed_failed')
+          OR (NEW.status='Succeeded') <> (NEW.reconciliation_state='confirmed_succeeded')) THEN
+    RAISE EXCEPTION 'Unknown can become terminal only through reconciliation (matching confirmed state)';
+  END IF;
+  IF OLD.status='Executing' AND OLD.lease_until < now() AND NEW.status NOT IN ('Unknown') THEN
+    RAISE EXCEPTION 'expired execution lease must become Unknown';
+  END IF;
+  IF NEW.status='Unknown' AND NEW.reconciliation_state IS NULL THEN
+    RAISE EXCEPTION 'Unknown requires reconciliation state';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER trg_tool_execution_state_guard
+  BEFORE UPDATE ON tool_executions FOR EACH ROW
+  EXECUTE FUNCTION tool_execution_state_guard();
+
+-- RT-042: explicitly ensure definer remains non-login, non-superuser, no bypass.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='qembed_definer'
+      AND NOT rolcanlogin AND NOT rolsuper AND NOT rolbypassrls) THEN
+    RAISE EXCEPTION 'qembed_definer must be NOLOGIN NOSUPERUSER NOBYPASSRLS';
+  END IF;
+END $$;
+
+COMMIT;

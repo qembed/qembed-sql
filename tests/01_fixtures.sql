@@ -1,0 +1,12 @@
+\set ON_ERROR_STOP on
+SET client_min_messages=warning;
+-- fixtures as superuser
+INSERT INTO tenants(id) VALUES ('aaaaaaaa-0000-0000-0000-000000000001'),('bbbbbbbb-0000-0000-0000-000000000002');
+INSERT INTO embedding_models VALUES ('m3','x','x',3,'cosine',true,now());
+INSERT INTO tool_definitions VALUES ('11111111-0000-0000-0000-000000000001','t1','d',now());
+INSERT INTO tool_versions VALUES ('11111111-0000-0000-0000-0000000000a1','11111111-0000-0000-0000-000000000001','1','R2','{}','{}',1000,true),
+ ('11111111-0000-0000-0000-0000000000a2','11111111-0000-0000-0000-000000000001','2','R2','{}','{}',1000,true);
+INSERT INTO principals(id,tenant_id,kind,key_hash) VALUES
+ ('22222222-0000-0000-0000-00000000000a','aaaaaaaa-0000-0000-0000-000000000001','TenantOwner','\x01'),
+ ('22222222-0000-0000-0000-00000000000b','aaaaaaaa-0000-0000-0000-000000000001','TenantAdmin','\x02'),
+ ('22222222-0000-0000-0000-00000000000c','bbbbbbbb-0000-0000-0000-000000000002','TenantOwner','\x03');
