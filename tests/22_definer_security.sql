@@ -15,10 +15,10 @@ CREATE TEMP TABLE principals (
 );
 INSERT INTO principals VALUES
   ('99999999-0000-0000-0000-000000000099',
-   'bbbbbbbb-0000-0000-0000-000000000002','TenantOwner','\\x01',NULL);
+   'bbbbbbbb-0000-0000-0000-000000000002','TenantOwner','\x01',NULL);
 CREATE TEMP TABLE objects (object_id uuid, tenant_id uuid);
 SELECT tt.chk('AUDIT-010 authenticate_principal ignores temporary shadow table',
-  $q$SELECT EXISTS (SELECT 1 FROM authenticate_principal('\\x01')
+  $q$SELECT EXISTS (SELECT 1 FROM authenticate_principal('\x01')
        WHERE principal_id='22222222-0000-0000-0000-00000000000a')$q$);
 SELECT tt.chk('AUDIT-010 resolve_object_tenant ignores temporary shadow table',
   $q$SELECT resolve_object_tenant('0b000000-0000-0000-0000-000000000001')
