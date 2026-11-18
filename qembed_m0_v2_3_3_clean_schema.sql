@@ -4,8 +4,8 @@
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
--- Rust-compat remediation: AUDIT-001..008 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS, composite tenant FKs).
--- AUDIT-009..010 are separate patches.
+-- Rust-compat remediation: AUDIT-001..009 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS, composite tenant FKs, Invocation lifecycle/fencing).
+-- AUDIT-010 is the final security-hardening patch.
 -- =============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -46,6 +46,11 @@ BEGIN
 END $$;
 -- qembed_definer: NOLOGIN owner of SECURITY DEFINER functions (A2). Subject to
 -- RLS; sees data only through explicit policies defined in section 20.
+
+-- SECURITY DEFINER functions use this schema in their fixed search_path.
+-- Application and PUBLIC roles must never be able to shadow objects there.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer;
 
 -- -----------------------------------------------------------------------------
 -- 1. Guards
