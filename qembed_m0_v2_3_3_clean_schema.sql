@@ -4,8 +4,8 @@
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
--- Rust-compat remediation: AUDIT-001..004 applied (physical contracts, owner auth, object state/drafts, snapshots).
--- AUDIT-006..010 are separate patches.
+-- Rust-compat remediation: AUDIT-001..006 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS).
+-- AUDIT-007..010 are separate patches.
 -- =============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -1029,35 +1029,9 @@ END $$;
 -- They do NOT replace Rust-side RFC 8785/JCS canonicalization.
 -- =============================================================================
 
--- RT-039: the hash is over canonical bytes. The JSONB projections must decode
--- from those same bytes; JCS byte-canonicality is verified in Rust before INSERT.
-CREATE FUNCTION runtime_snapshot_projection_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
-DECLARE j JSONB;
-BEGIN
-  IF digest(NEW.canonical_json, 'sha256') IS DISTINCT FROM NEW.content_hash THEN
-    RAISE EXCEPTION 'snapshot content hash mismatch';
-  END IF;
-  BEGIN
-    j := convert_from(NEW.canonical_json, 'UTF8')::jsonb;
-  EXCEPTION WHEN others THEN
-    RAISE EXCEPTION 'canonical_json must be valid UTF-8 JSON';
-  END;
-  IF (j->'config') IS DISTINCT FROM NEW.config
-     OR (j->'capabilities') IS DISTINCT FROM NEW.capabilities
-     OR (j->'tool_bindings') IS DISTINCT FROM NEW.tool_bindings
-     OR (j->'budget_snapshot') IS DISTINCT FROM NEW.budget_snapshot
-     OR (j->'context_config') IS DISTINCT FROM NEW.context_config
-     OR (j->>'schema_version') IS DISTINCT FROM NEW.schema_version::text
-     OR (j->>'policy_version') IS DISTINCT FROM NEW.policy_version THEN
-    RAISE EXCEPTION 'snapshot JSONB projections do not match canonical_json';
-  END IF;
-  RETURN NEW;
-END $$;
-CREATE TRIGGER trg_snapshot_projection_guard
-  BEFORE INSERT ON snapshots FOR EACH ROW
-  EXECUTE FUNCTION runtime_snapshot_projection_guard();
-
+-- AUDIT-004 supersedes the former r3 projection trigger above: Rust stores
+-- canonical_json + content_hash + json_projection only. The active guard is
+-- snapshots_projection_guard, defined alongside the Rust-shaped table.
 -- A policy decision must pin the same snapshot/caller as its invocation.
 CREATE FUNCTION policy_decision_invocation_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
