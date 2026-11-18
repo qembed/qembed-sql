@@ -6,7 +6,7 @@ INSERT INTO objects(tenant_id,object_id,state)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000001','draft');
 SELECT tt.try('AUDIT-007 new object cannot start Active','err',
  $q$INSERT INTO objects(tenant_id,object_id,state,published_version_id)
-    VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000004','active','18000000-0000-0000-0000-000000000002')$q$);
+    VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000004','validating',NULL)$q$);
 SELECT tt.try('AUDIT-007 new object version cannot start Published','err',
  $q$INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number,status)
     VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000005',3,'published')$q$);
@@ -45,5 +45,5 @@ UPDATE objects SET state='archived'
 SELECT tt.try('AUDIT-007 Archived object cannot be revived','err',
  $q$UPDATE objects SET state='active' WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
 SELECT tt.try('AUDIT-007 Archived published pointer cannot be replaced','err',
- $q$UPDATE objects SET published_version_id='18000000-0000-0000-0000-000000000002' WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
+ $q$UPDATE objects SET published_version_id=NULL WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
 
