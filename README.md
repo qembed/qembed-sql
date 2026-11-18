@@ -176,3 +176,12 @@ Rust-репозиторий — неизменяемый источник кон
 5. **F-05** — сверить B-01…B-09 и подготовить rollout/upgrade документацию.
 
 Каждый этап оформлять отдельным SQL-only PR с тестами и явным evidence. До получения результатов не приписывать smoke suite, acceptance matrix или concurrency tests статус «пройдены».
+
+
+## SQL-011 — Principal / Caller delegation
+
+The schema now keeps the authenticated owner Principal (owner_principals) separate from the effective invocation Caller (callers). The tenant-scoped principal_caller_delegations relation supports multiple explicit Caller identities per Principal, including the existing Anonymous, Authenticated, and Service kinds. Grants are auditable and revocation is final; re-granting creates a new history row.
+
+Runtime resolves the selected Caller only through a valid delegation and must re-check Principal and Caller lifecycle state at invocation time. The runtime role cannot write delegation rows directly: it uses narrow SECURITY DEFINER grant/revoke functions with trusted app.tenant_id and app.principal_id transaction context. See ADR_RT-049_Principal_Caller_Delegation.md and tests/07_principal_caller_delegation.sql.
+
+SQL-011 is a schema extension, not a change to the existing Rust owner-authentication contract. Rust integration must set trusted Principal context and lock the active delegation row FOR SHARE in the same begin-invocation transaction, so revocation and invocation start are serialized.
