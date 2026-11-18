@@ -4,7 +4,7 @@ SET client_min_messages=warning;
 
 INSERT INTO objects(tenant_id,object_id,state)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000001','draft');
-SELECT tt.try('AUDIT-007 new object cannot start Active','err',
+SELECT tt.try('AUDIT-007 new object cannot start Validating','err',
  $q$INSERT INTO objects(tenant_id,object_id,state,published_version_id)
     VALUES ('aaaaaaaa-0000-0000-0000-000000000001','18000000-0000-0000-0000-000000000004','validating',NULL)$q$);
 SELECT tt.try('AUDIT-007 new object version cannot start Published','err',
