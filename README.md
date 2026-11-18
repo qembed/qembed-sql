@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `71778b24e6b7f51ea5bd2a2d5c2f8dee669429eae92660a23e327b6e9dccd8c0`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `2264d850e053ca77359f49cb4a8a254799f2e00a5e3c6c2d6e521cb7bde6cebb`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -40,7 +40,8 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-002 owner authentication | **применён** (`owner_principals`, `owner_credentials`) |
 | AUDIT-003 object state / Draft versions | **применён** (lowercase state, multiple Draft versions) |
 | AUDIT-004 snapshots | **применён** (canonical bytes, hash, JSONB projection, immutability) |
-| AUDIT-005 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-005 events/outbox | **применён** (Rust columns, append-only events, delivery timestamp) |
+| AUDIT-006 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -54,7 +55,7 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Остаются расхождения, закрываемые следующими аудитами: состав колонок `events`/`outbox_messages` (005).
+Остаются расхождения, закрываемые следующими аудитами: tenant RLS и lifecycle-поведение (006+).
 
 
 ### AUDIT-002: owner authentication
@@ -79,3 +80,11 @@ Rust-репозиторий — неизменяемый источник кон
 - Snapshot UPDATE and DELETE are rejected with SQLSTATE `55000`, matching Rust integration tests.
 - The database checks hash length, while Rust recomputes SHA-256 and validates JCS when reconstructing a snapshot. A database digest-equality CHECK is deliberately absent so corrupted persisted hashes are detected at the Rust read boundary, as tested by `snapshot_repository.rs`.
 - Regression coverage is in `tests/15_snapshots.sql`, wired into `tests/run_smoke.sh`.
+
+
+### AUDIT-005: events and outbox
+- `events` and `outbox_messages` now use the exact Rust migration columns, defaults, primary/unique keys and tenant-consistent outbox FK.
+- Event ordering uses `events_aggregate_order_idx`; events reject UPDATE/DELETE with SQLSTATE `55000`.
+- Outbox delivery state is represented only by nullable `delivered_at`. The dispatcher can update that column, not event identity or payload.
+- The pending index is `(created_at, delivery_id) WHERE delivered_at IS NULL`. Retention removes only delivered rows older than the cutoff; undelivered messages are retained.
+- Regression coverage is in `tests/16_events_outbox.sql`; the Rust physical contract assertions and smoke runner include AUDIT-005.

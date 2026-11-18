@@ -1,8 +1,7 @@
 -- AUDIT-001: physical contract against the Rust migrations
 --   20261118000001_objects.sql, 20261118000002_snapshots.sql, 20261118000003_events_outbox.sql
--- Scope = the columns/keys AUDIT-001 aligns. Columns still open in later audits are NOT asserted here
--- (objects.state values -> AUDIT-003; snapshots.json_projection -> AUDIT-004;
---  events.aggregate_*/event_type, outbox_messages.topic/payload -> AUDIT-005).
+-- Scope = physical columns and keys aligned through AUDIT-005.
+-- Behavioral guards and indexes are covered by tests/15_snapshots.sql and tests/16_events_outbox.sql.
 \set ON_ERROR_STOP on
 SET client_min_messages=warning;
 
@@ -14,7 +13,7 @@ SELECT tt.chk('AUDIT-001 r3 table names are gone',
  $q$SELECT count(*)=0 FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','v','m')
       AND relname IN ('qembed_objects','runtime_snapshots','object_events','outbox')$q$);
 
-SELECT tt.chk('AUDIT-001/004 column contract (type, NOT NULL, default) of Rust columns',
+SELECT tt.chk('AUDIT-001/004/005 column contract (type, NOT NULL, default) of Rust columns',
  $q$WITH want(t,c,ty,nn,def) AS (VALUES
    ('objects','tenant_id','uuid',true,NULL::text),
    ('objects','object_id','uuid',true,NULL),
@@ -38,9 +37,18 @@ SELECT tt.chk('AUDIT-001/004 column contract (type, NOT NULL, default) of Rust c
    ('snapshots','created_at','timestamp with time zone',true,'now()'),
    ('events','tenant_id','uuid',true,NULL),
    ('events','event_id','uuid',true,NULL),
+   ('events','aggregate_type','text',true,NULL),
+   ('events','aggregate_id','uuid',true,NULL),
+   ('events','event_type','text',true,NULL),
+   ('events','payload','jsonb',true,NULL),
+   ('events','occurred_at','timestamp with time zone',true,'now()'),
    ('outbox_messages','tenant_id','uuid',true,NULL),
    ('outbox_messages','delivery_id','uuid',true,NULL),
-   ('outbox_messages','event_id','uuid',true,NULL)
+   ('outbox_messages','event_id','uuid',true,NULL),
+   ('outbox_messages','topic','text',true,NULL),
+   ('outbox_messages','payload','jsonb',true,NULL),
+   ('outbox_messages','created_at','timestamp with time zone',true,'now()'),
+   ('outbox_messages','delivered_at','timestamp with time zone',false,NULL)
  ), have AS (
    SELECT c.relname t, a.attname c, format_type(a.atttypid,a.atttypmod) ty, a.attnotnull nn,
           pg_get_expr(d.adbin,d.adrelid) def
@@ -50,7 +58,7 @@ SELECT tt.chk('AUDIT-001/004 column contract (type, NOT NULL, default) of Rust c
    SELECT count(*)=0 FROM want w LEFT JOIN have h USING (t,c)
     WHERE h.c IS NULL OR h.ty<>w.ty OR h.nn<>w.nn OR h.def IS DISTINCT FROM w.def$q$);
 
-SELECT tt.chk('AUDIT-001 PK/UNIQUE/FK column lists match the Rust constraints',
+SELECT tt.chk('AUDIT-001/005 PK/UNIQUE/FK column lists match the Rust constraints',
  $q$WITH want(t,ty,cols,rt,rcols) AS (VALUES
    ('objects','p','tenant_id,object_id',NULL::text,NULL::text),
    ('objects','u','object_id',NULL,NULL),
@@ -65,6 +73,7 @@ SELECT tt.chk('AUDIT-001 PK/UNIQUE/FK column lists match the Rust constraints',
    ('events','p','tenant_id,event_id',NULL,NULL),
    ('events','u','event_id',NULL,NULL),
    ('outbox_messages','p','tenant_id,delivery_id',NULL,NULL),
+   ('outbox_messages','u','tenant_id,event_id',NULL,NULL),
    ('outbox_messages','f','tenant_id,event_id','events','tenant_id,event_id')
  ), have AS (
    SELECT c.relname t, k.contype::text ty,
@@ -79,7 +88,7 @@ SELECT tt.chk('AUDIT-001 PK/UNIQUE/FK column lists match the Rust constraints',
    SELECT count(*)=0 FROM want w WHERE NOT EXISTS (SELECT 1 FROM have h
      WHERE h.t=w.t AND h.ty=w.ty AND h.cols=w.cols AND h.rt IS NOT DISTINCT FROM w.rt AND h.rcols IS NOT DISTINCT FROM w.rcols)$q$);
 
-SELECT tt.chk('AUDIT-001 Rust FKs are ON DELETE RESTRICT, published pointer FK keeps the Rust name',
+SELECT tt.chk('AUDIT-001/005 Rust FKs are ON DELETE RESTRICT, published pointer FK keeps the Rust name',
  $q$SELECT (SELECT count(*)=4 FROM pg_constraint
              WHERE contype='f' AND confdeltype='r'
                AND conrelid::regclass::text||'->'||confrelid::regclass::text IN

@@ -57,9 +57,14 @@ SELECT tt.chk('T-51 dispatcher reads outbox_messages', $q$SELECT count(*)>=1 FRO
 SELECT tt.chk('T-51 dispatcher reads events', $q$SELECT count(*)>=1 FROM events$q$);
 SELECT tt.try('T-51 dispatcher callers denied','err',$q$SELECT * FROM callers$q$);
 SELECT tt.try('T-51 dispatcher messages denied','err',$q$SELECT * FROM interaction_messages$q$);
-SELECT tt.try('dispatcher mark delivered','ok',$q$UPDATE outbox_messages SET status='Delivered',delivered_at=now()$q$);
+SELECT tt.try('dispatcher mark delivered (delivered_at only)','ok',$q$UPDATE outbox_messages SET delivered_at=now() WHERE delivered_at IS NULL AND delivery_id=(SELECT delivery_id FROM outbox_messages WHERE delivered_at IS NULL ORDER BY created_at,delivery_id LIMIT 1)$q$);
 SELECT tt.try('dispatcher INSERT outbox_messages denied','err',$q$INSERT INTO outbox_messages(delivery_id,tenant_id,event_id) VALUES (gen_random_uuid(),current_setting('app.tenant_id',true)::uuid,gen_random_uuid())$q$);
 RESET ROLE;
+-- retention may purge delivered rows, but must preserve pending deliveries
+SET ROLE qembed_retention;
+SELECT tt.try('AUDIT-005 retention purges delivered outbox rows','ok',$q$SELECT retention_purge('outbox_messages',now(),'ttl')$q$);
+RESET ROLE;
+SELECT tt.chk('AUDIT-005 retention preserves pending outbox rows', $q$SELECT count(*)=1 AND bool_and(delivered_at IS NULL) FROM outbox_messages$q$);
 -- RLS audit & role attrs
 SELECT tt.chk('T-54 role attrs', $q$SELECT count(*)=0 FROM pg_roles WHERE rolname LIKE 'qembed_%' AND rolname<>'qembed_migrator' AND (rolsuper OR rolbypassrls OR rolcanlogin)$q$);
 SELECT tt.chk('T-57 definer fns owned by definer, no PUBLIC exec', $q$SELECT bool_and(pg_get_userbyid(proowner)='qembed_definer' AND NOT has_function_privilege('public',p.oid,'EXECUTE') AND prosecdef AND proconfig IS NOT NULL) FROM pg_proc p WHERE pronamespace='public'::regnamespace AND prosecdef$q$);
