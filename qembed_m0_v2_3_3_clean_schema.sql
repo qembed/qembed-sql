@@ -446,7 +446,7 @@ BEGIN
   END IF;
 
   IF status_changed OR token_changed THEN
-    IF OLD.version = 9223372036854775807 OR NEW.version <> OLD.version + 1 THEN
+    IF NEW.version::numeric <> OLD.version::numeric + 1 THEN
       RAISE EXCEPTION 'invocation optimistic version must advance exactly once'
         USING ERRCODE = '40001';
     END IF;
