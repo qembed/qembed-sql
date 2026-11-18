@@ -44,7 +44,7 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-006 tenant RLS | **применён** (ENABLE/FORCE, actual-table isolation tests, pre-auth exception) |
 | AUDIT-007 ObjectVersion / object lifecycle | **применён** (строгие переходы статусов и неизменяемая identity) |
 | AUDIT-008 composite tenant FKs | **применён** (каталожная проверка и cross-tenant negative tests) |
-| AUDIT-009 Invocation lifecycle/fencing | **PR** (state machine, optimistic version и lease reclaim guard; ожидает ревью) |
+| AUDIT-009 Invocation lifecycle/fencing | **PR #9** (state machine, optimistic version и lease reclaim guard; ожидает ревью) |
 | AUDIT-010 | не применён, отдельный патч |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
@@ -59,7 +59,7 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Остаются расхождения, закрываемые следующими аудитами: composite tenant FKs и дальнейшие расширения (008+).
+Остаются расхождения и расширения, закрываемые следующими аудитами (010+).
 
 
 ### AUDIT-002: owner authentication
