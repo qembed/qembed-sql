@@ -23,7 +23,7 @@ The relationship is represented by principal_caller_delegations. UUID equality b
 
 ## Revocation and invocation race
 
-The begin-invocation transaction must resolve the exact active Principal/Caller delegation and lock that row with SELECT ... FOR SHARE before it inserts the invocation. The revocation function updates the same row. PostgreSQL row locking therefore orders the two operations: either begin-invocation commits while holding the lock before revocation, or it observes the revoked grant and fails. Provider I/O happens only after the invocation transaction commits.
+The begin-invocation transaction calls resolve_delegated_caller(p_caller_id), which verifies the exact active Principal/Caller delegation and locks the delegation, Principal, and Caller rows with SELECT ... FOR SHARE before it inserts the invocation. The revocation function updates the same row. PostgreSQL row locking therefore orders the two operations: either begin-invocation commits while holding the lock before revocation, or it observes the revoked grant and fails. Provider I/O happens only after the invocation transaction commits.
 
 The lock must be held until the begin-invocation transaction commits. A plain unlocked SELECT is insufficient for the revocation race.
 
@@ -32,13 +32,13 @@ The lock must be held until the begin-invocation transaction commits. A plain un
 - The authentication adapter continues to authenticate against owner_principals / owner_credentials; SQL-011 does not replace that path.
 - The trusted application layer carries the authenticated Principal separately from the selected Caller.
 - The transaction context must set tenant and Principal IDs from trusted authentication state, never from request DTO fields.
-- The runtime resolves an explicit Caller choice through principal_caller_delegations, checks Principal and Caller lifecycle state, and pins the Caller ID into object_invocations and the idempotency reservation.
+- The runtime resolves an explicit Caller choice through resolve_delegated_caller(uuid), checks Principal and Caller lifecycle state under row locks, and pins the Caller ID into object_invocations and the idempotency reservation.
 - Idempotency is scoped by the effective Caller. Repeating the same key as a different Caller is a different idempotency scope.
 - Anonymous and Service Callers remain distinct execution identities. Whether a transport is allowed to select a particular Caller is an application policy; possession of a Caller UUID alone is never authorization.
 
 ## Boundaries and follow-up
 
-SQL-011 introduces the physical relation, grant/revoke functions, RLS/grants, and regression tests. It does not change the Rust Principal, Scope, or TenantTransaction implementation. The Rust follow-up must add trusted Principal context and a transaction-scoped delegation resolver/lock before RUST-036 can safely create invocations.
+SQL-011 introduces the physical relation, grant/revoke/resolution functions, RLS/grants, and regression tests. It does not change the Rust Principal, Scope, or TenantTransaction implementation. The Rust follow-up must add trusted Principal context and a transaction-scoped delegation resolver/lock before RUST-036 can safely create invocations.
 
 The app.* settings are trusted application context, just like the existing tenant setting. RLS and SECURITY DEFINER functions are not a defense against arbitrary SQL executed with the runtime database role; that role and its connection path must remain application-internal.
 
