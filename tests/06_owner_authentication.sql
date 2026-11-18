@@ -103,6 +103,8 @@ SELECT tt.try('AUDIT-002 admin provisions principal','ok',$q$INSERT INTO owner_p
 SELECT tt.try('AUDIT-002 admin re-issues a digest whose old credential is revoked','ok',$q$INSERT INTO owner_credentials(tenant_id,caller_id,token_hash) VALUES ('aaaaaaaa-0000-0000-0000-000000000001','c1000000-0000-0000-0000-000000000001',digest('tok-a3','sha256'))$q$);
 SELECT tt.try('AUDIT-002 admin revokes credential','ok',$q$UPDATE owner_credentials SET revoked_at=now() WHERE token_hash=digest('tok-a1','sha256')$q$);
 SELECT tt.try('AUDIT-002 admin disables principal','ok',$q$UPDATE owner_principals SET disabled_at=now() WHERE caller_id='c1000000-0000-0000-0000-000000000004'$q$);
+SELECT tt.try('AUDIT-002 admin cannot UPDATE principal identity','err',$q$UPDATE owner_principals SET caller_id=caller_id WHERE caller_id='c1000000-0000-0000-0000-000000000004'$q$);
+SELECT tt.try('AUDIT-002 admin cannot UPDATE principal kind','err',$q$UPDATE owner_principals SET principal_kind='tenant_owner' WHERE caller_id='c1000000-0000-0000-0000-000000000004'$q$);
 SELECT tt.try('AUDIT-002 admin cannot DELETE credential','err',$q$DELETE FROM owner_credentials$q$);
 RESET ROLE;
 SET ROLE qembed_runtime;

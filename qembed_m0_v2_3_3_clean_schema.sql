@@ -954,7 +954,9 @@ GRANT SELECT, UPDATE ON outbox_messages TO qembed_dispatcher;
 GRANT SELECT, INSERT, UPDATE ON tenants, principals, kill_switches, objects,
   embedding_models, tool_definitions, tool_versions TO qembed_admin;
 GRANT SELECT, INSERT ON knowledge_revisions TO qembed_admin;          -- r3 (R3-06)
-GRANT SELECT, INSERT, UPDATE ON owner_principals, owner_credentials TO qembed_admin;  -- AUDIT-002: provision / disable / revoke (no DELETE)
+GRANT SELECT, INSERT ON owner_principals TO qembed_admin;  -- AUDIT-002: provision principals
+GRANT UPDATE (disabled_at) ON owner_principals TO qembed_admin;  -- only lifecycle mutation; identity is immutable
+GRANT SELECT, INSERT, UPDATE ON owner_credentials TO qembed_admin;  -- provision / revoke (guard protects identity/digest; no DELETE)
 
 -- retention
 GRANT EXECUTE ON FUNCTION retention_purge(text,timestamptz,text) TO qembed_retention;

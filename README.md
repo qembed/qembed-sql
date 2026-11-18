@@ -61,6 +61,6 @@ Rust-репозиторий — неизменяемый источник кон
   r3 `principals`/`callers`/`authenticate_principal` остаются отдельным будущим расширением и Rust-путём не используются.
 - Pre-auth lookup идёт без tenant Scope, поэтому tenant-RLS на этих таблицах нет; доступ ограничен column-level grants:
   роль приложения (`qembed_runtime`) имеет только SELECT на колонки, которые читает Rust-запрос. Создание и отзыв
-  credentials — `qembed_admin` (INSERT/UPDATE, без DELETE). Revisit в AUDIT-006.
+  credentials — `qembed_admin` (INSERT; для `owner_principals` UPDATE разрешён только по `disabled_at`, для `owner_credentials` — только отзыв через защищённый триггер; без DELETE). Revisit в AUDIT-006.
 - `owner_credentials_active_lookup` — UNIQUE по `(tenant_id, token_hash) WHERE revoked_at IS NULL`: два активных
   credentials с одним digest в tenant невозможны. Digest и идентичность неизменяемы, отзыв необратим.
