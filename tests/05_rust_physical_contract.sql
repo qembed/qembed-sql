@@ -1,8 +1,7 @@
 -- AUDIT-001: physical contract against the Rust migrations
 --   20261118000001_objects.sql, 20261118000002_snapshots.sql, 20261118000003_events_outbox.sql
--- Scope = the columns/keys AUDIT-001 aligns. Columns still open in later audits are NOT asserted here
--- (objects.state values -> AUDIT-003; snapshots.json_projection -> AUDIT-004;
---  events.aggregate_*/event_type, outbox_messages.topic/payload -> AUDIT-005).
+-- Scope = physical columns and keys aligned through AUDIT-005.
+-- Behavioral guards and indexes are covered by tests/15_snapshots.sql and tests/16_events_outbox.sql.
 \set ON_ERROR_STOP on
 SET client_min_messages=warning;
 
