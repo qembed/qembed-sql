@@ -17,7 +17,7 @@ SELECT tt.try('T-59 Unknown ->Succeeded via proper reconciliation','ok',$q$UPDAT
 RESET ROLE;
 -- admin creating an object (provisioning)
 SET ROLE qembed_admin;
-SELECT tt.try('R3-06 admin provisions object','ok',$q$INSERT INTO objects(object_id,tenant_id,state) VALUES (gen_random_uuid(),'bbbbbbbb-0000-0000-0000-000000000002','Draft')$q$);
+SELECT tt.try('R3-06 admin provisions object','ok',$q$INSERT INTO objects(object_id,tenant_id,state) VALUES (gen_random_uuid(),'bbbbbbbb-0000-0000-0000-000000000002','draft')$q$);
 RESET ROLE;
 -- HNSW creation as migrator (concurrently, outside txn)
 CREATE INDEX CONCURRENTLY hnsw_m3 ON knowledge_chunk_embeddings USING hnsw ((embedding::vector(3)) vector_cosine_ops) WHERE model_id='m3';

@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `60598a97e48a23b1af93fa436744522932a3ee177619a081620e9a6c04fd7e67`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `34f8cc93d1ae0a1f452e4a7945c2aae083e363321ecbb6e7174c671131b084d6`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -38,7 +38,8 @@ Rust-репозиторий — неизменяемый источник кон
 |---|---|
 | AUDIT-001 физические имена/ключи | **применён** (этот патч) |
 | AUDIT-002 owner authentication | **применён** (`owner_principals`, `owner_credentials`) |
-| AUDIT-003 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-003 object state / Draft versions | **применён** (lowercase state, multiple Draft versions) |
+| AUDIT-004 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -52,8 +53,8 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Остаются расхождения, закрываемые следующими аудитами: значения `objects.state` и индекс одной Draft-версии (003),
-`snapshots.json_projection` и обязательные projection-колонки (004), состав колонок `events`/`outbox_messages` (005).
+Остаются расхождения, закрываемые следующими аудитами: `snapshots.json_projection` и обязательные projection-колонки (004),
+состав колонок `events`/`outbox_messages` (005).
 
 
 ### AUDIT-002: owner authentication
@@ -64,3 +65,9 @@ Rust-репозиторий — неизменяемый источник кон
   credentials — `qembed_admin` (INSERT; для `owner_principals` UPDATE разрешён только по `disabled_at`, для `owner_credentials` — только отзыв через защищённый триггер; без DELETE). Revisit в AUDIT-006.
 - `owner_credentials_active_lookup` — UNIQUE по `(tenant_id, token_hash) WHERE revoked_at IS NULL`: два активных
   credentials с одним digest в tenant невозможны. Digest и идентичность неизменяемы, отзыв необратим.
+
+
+### AUDIT-003: object state and draft versions
+- `objects.state` uses the Rust lowercase vocabulary (`draft`, `validating`, `active`, `suspended`, `archived`) and defaults to `draft`.
+- The one-Draft-per-object partial unique index is removed. Multiple Draft versions may coexist; publication remains protected by the published-version uniqueness/pointer rules and the Rust repository's transactional publication path.
+- Regression coverage checks the default, rejects the legacy uppercase state, and inserts two Draft versions for one object.
