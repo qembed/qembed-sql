@@ -41,7 +41,8 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-003 object state / Draft versions | **применён** (lowercase state, multiple Draft versions) |
 | AUDIT-004 snapshots | **применён** (canonical bytes, hash, JSONB projection, immutability) |
 | AUDIT-005 events/outbox | **применён** (Rust columns, append-only events, delivery timestamp) |
-| AUDIT-006 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-006 tenant RLS | **применён** (ENABLE/FORCE, actual-table isolation tests, pre-auth exception) |
+| AUDIT-007 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -55,7 +56,7 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Остаются расхождения, закрываемые следующими аудитами: tenant RLS и lifecycle-поведение (006+).
+Остаются расхождения, закрываемые следующими аудитами: object lifecycle guards и дальнейшие расширения (007+).
 
 
 ### AUDIT-002: owner authentication
@@ -88,3 +89,12 @@ Rust-репозиторий — неизменяемый источник кон
 - Outbox delivery state is represented only by nullable `delivered_at`. The dispatcher can update that column, not event identity or payload.
 - The pending index is `(created_at, delivery_id) WHERE delivered_at IS NULL`. Retention removes only delivered rows older than the cutoff; undelivered messages are retained.
 - Regression coverage is in `tests/16_events_outbox.sql`; the Rust physical contract assertions and smoke runner include AUDIT-005.
+
+
+### AUDIT-006: tenant RLS
+- Every table with a required `tenant_id` is checked for ENABLE + FORCE ROW LEVEL SECURITY and the `qembed_runtime` tenant policy.
+- Two-tenant regression tests exercise the actual Rust repository tables: `objects`, `object_versions`, `snapshots`, `events`, and `outbox_messages`. They verify reciprocal isolation, missing-scope behavior, and rejected cross-tenant writes.
+- `owner_principals` and `owner_credentials` remain outside tenant RLS intentionally: Rust performs the credential lookup before a `Scope` exists. Their access remains limited to the exact pre-auth columns.
+- Removed an obsolete r3 snapshot trigger that referenced projection columns no longer present in the Rust snapshot schema. The AUDIT-004 `snapshots_projection_guard` is the sole projection guard.
+- Rust's `TenantTransaction` establishes `app.tenant_id` transaction-locally using a bound parameter. RLS enforces that trusted transaction context; it is not an independent defense against arbitrary SQL executed with the runtime database role, which must remain application-internal.
+- Regression coverage is in `tests/17_tenant_rls.sql`, wired into `tests/run_smoke.sh`.
