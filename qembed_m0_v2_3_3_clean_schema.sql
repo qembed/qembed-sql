@@ -256,7 +256,7 @@ CREATE TABLE snapshots (
 -- Match the projection against the JSON value represented by the exact source bytes.
 -- JSONB is query-only; it is never used to reconstruct canonical_json.
 CREATE FUNCTION enforce_snapshot_projection() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $snapshot_projection$
 BEGIN
   IF NEW.json_projection IS DISTINCT FROM
       convert_from(NEW.canonical_json, 'UTF8')::jsonb THEN
@@ -264,16 +264,16 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
-END $;
+END $snapshot_projection$;
 CREATE TRIGGER snapshots_projection_guard
   BEFORE INSERT OR UPDATE ON snapshots
   FOR EACH ROW EXECUTE FUNCTION enforce_snapshot_projection();
 
 CREATE FUNCTION reject_snapshot_mutation() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $snapshot_immutable$
 BEGIN
   RAISE EXCEPTION 'snapshots are immutable' USING ERRCODE = '55000';
-END $;
+END $snapshot_immutable$;
 CREATE TRIGGER snapshots_immutable
   BEFORE UPDATE OR DELETE ON snapshots
   FOR EACH ROW EXECUTE FUNCTION reject_snapshot_mutation();
