@@ -45,6 +45,13 @@ SELECT tt.chk('AUDIT-006 all tenant-owned tables have ENABLE+FORCE RLS and runti
 SELECT tt.chk('AUDIT-006 pre-auth owner tables remain outside tenant RLS',
  $q$SELECT bool_and(NOT c.relrowsecurity AND NOT c.relforcerowsecurity)
     FROM pg_class c WHERE c.oid IN ('public.owner_principals'::regclass,'public.owner_credentials'::regclass)$q$);
+SELECT tt.chk('AUDIT-006 pre-auth owner grants remain column-limited',
+ $q$SELECT has_column_privilege('qembed_runtime','owner_principals','tenant_id','SELECT')
+    AND has_column_privilege('qembed_runtime','owner_principals','disabled_at','SELECT')
+    AND NOT has_column_privilege('qembed_runtime','owner_principals','created_at','SELECT')
+    AND has_column_privilege('qembed_runtime','owner_credentials','token_hash','SELECT')
+    AND has_column_privilege('qembed_runtime','owner_credentials','revoked_at','SELECT')
+    AND NOT has_column_privilege('qembed_runtime','owner_credentials','created_at','SELECT')$q$);
 
 SET ROLE qembed_runtime;
 SELECT set_config('app.tenant_id','aaaaaaaa-0000-0000-0000-000000000001',false);
@@ -80,4 +87,9 @@ SELECT tt.chk('AUDIT-006 B can see own version', $q$SELECT count(*)=1 FROM objec
 SELECT tt.chk('AUDIT-006 B can see own snapshot', $q$SELECT count(*)=1 FROM snapshots WHERE snapshot_id='bb000000-0000-0000-0000-000000000003'$q$);
 SELECT tt.chk('AUDIT-006 B can see own event', $q$SELECT count(*)=1 FROM events WHERE event_id='bb000000-0000-0000-0000-000000000004'$q$);
 SELECT tt.chk('AUDIT-006 B can see own outbox row', $q$SELECT count(*)=1 FROM outbox_messages WHERE delivery_id='bb000000-0000-0000-0000-000000000005'$q$);
+SELECT tt.chk('AUDIT-006 B cannot see A object', $q$SELECT count(*)=0 FROM objects WHERE object_id='0b000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('AUDIT-006 B cannot see A version', $q$SELECT count(*)=0 FROM object_versions WHERE object_id='0b000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('AUDIT-006 B cannot see A snapshot', $q$SELECT count(*)=0 FROM snapshots WHERE object_id='0b000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('AUDIT-006 B cannot see A event', $q$SELECT count(*)=0 FROM events WHERE aggregate_id='0b000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('AUDIT-006 B cannot see A outbox row', $q$SELECT count(*)=0 FROM outbox_messages WHERE tenant_id='aaaaaaaa-0000-0000-0000-000000000001'$q$);
 RESET ROLE;
