@@ -314,6 +314,55 @@ CREATE TABLE callers (
   UNIQUE (tenant_id, token_hash), UNIQUE (tenant_id, id)
 );
 
+-- Principal -> Caller delegation. owner_principals remains the Rust authentication
+-- identity; callers remains the invocation identity. A principal may delegate to
+-- multiple callers. Each grant is an immutable historical record; revocation is final,
+-- and a later re-grant creates a new delegation_id.
+CREATE TABLE principal_caller_delegations (
+  delegation_id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL,
+  principal_id UUID NOT NULL,
+  caller_id UUID NOT NULL,
+  granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_by_principal_id UUID,
+  CHECK ((revoked_at IS NULL) = (revoked_by_principal_id IS NULL)),
+  CHECK (revoked_by_principal_id IS NULL OR revoked_by_principal_id = principal_id),
+  FOREIGN KEY (tenant_id, principal_id)
+    REFERENCES owner_principals(tenant_id, caller_id) ON DELETE RESTRICT,
+  FOREIGN KEY (tenant_id, caller_id)
+    REFERENCES callers(tenant_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (tenant_id, revoked_by_principal_id)
+    REFERENCES owner_principals(tenant_id, caller_id) ON DELETE RESTRICT
+);
+CREATE UNIQUE INDEX principal_caller_delegations_active
+  ON principal_caller_delegations(tenant_id, principal_id, caller_id)
+  WHERE revoked_at IS NULL;
+
+CREATE FUNCTION principal_caller_delegation_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $delegation_guard$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    IF (NEW.delegation_id, NEW.tenant_id, NEW.principal_id, NEW.caller_id, NEW.granted_at)
+       IS DISTINCT FROM
+       (OLD.delegation_id, OLD.tenant_id, OLD.principal_id, OLD.caller_id, OLD.granted_at) THEN
+      RAISE EXCEPTION 'delegation identity is immutable' USING ERRCODE = '55000';
+    END IF;
+    IF OLD.revoked_at IS NOT NULL AND
+       (NEW.revoked_at, NEW.revoked_by_principal_id)
+       IS DISTINCT FROM (OLD.revoked_at, OLD.revoked_by_principal_id) THEN
+      RAISE EXCEPTION 'delegation revocation is final' USING ERRCODE = '55000';
+    END IF;
+  ELSIF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'delegation history is append-only' USING ERRCODE = '55000';
+  END IF;
+  RETURN NEW;
+END
+$delegation_guard$;
+CREATE TRIGGER trg_principal_caller_delegation_guard
+  BEFORE UPDATE OR DELETE ON principal_caller_delegations
+  FOR EACH ROW EXECUTE FUNCTION principal_caller_delegation_guard();
+
 -- -----------------------------------------------------------------------------
 -- 6. Snapshots (A4): canonical_json is the source of truth for the hash
 -- -----------------------------------------------------------------------------
@@ -981,7 +1030,8 @@ BEGIN
     'memory_conflicts','memory_embeddings','object_tools','policy_decisions',
     'tool_command_payloads','tool_executions','events','outbox_messages','object_budgets',
     'budget_reservations','usage_counters','caller_usage_counters','budget_event_dedup',
-    'object_goals','object_tasks','deletion_jobs','deletion_ledger']
+    'object_goals','object_tasks','deletion_jobs','deletion_ledger',
+    'principal_caller_delegations']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
@@ -1020,7 +1070,7 @@ CREATE POLICY disp_events ON events FOR SELECT TO qembed_dispatcher USING (true)
 DO $$
 DECLARE t TEXT;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['objects','object_invocations','budget_reservations',
+  FOREACH t IN ARRAY ARRAY['objects','object_invocations','callers','principal_caller_delegations','budget_reservations',
       'usage_counters','caller_usage_counters','tool_executions','tool_command_payloads',
       'interaction_messages','memories','invocation_idempotency','outbox_messages'] LOOP
     EXECUTE format('CREATE POLICY definer_access ON %I TO qembed_definer USING (true) WITH CHECK (true)', t);
@@ -1039,9 +1089,105 @@ CREATE POLICY admin_knowledge_revisions_ins ON knowledge_revisions FOR INSERT TO
 -- -----------------------------------------------------------------------------
 CREATE FUNCTION authenticate_principal(p_key_hash BYTEA)
 RETURNS TABLE (principal_id UUID, tenant_id UUID, kind TEXT)
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $authenticate_principal$
   SELECT id, tenant_id, kind FROM principals WHERE key_hash = p_key_hash AND revoked_at IS NULL
-$$;
+$authenticate_principal$;
+
+-- These functions trust app.tenant_id and app.principal_id only when set by the
+-- authenticated application transaction. The runtime role has no direct DML grant
+-- on the delegation table.
+CREATE FUNCTION grant_caller_delegation(p_caller_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $grant_caller_delegation$
+DECLARE
+  v_tenant_id UUID := NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+  v_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
+  v_delegation_id UUID := gen_random_uuid();
+BEGIN
+  IF v_tenant_id IS NULL OR v_principal_id IS NULL THEN
+    RAISE EXCEPTION 'tenant and authenticated principal context are required'
+      USING ERRCODE = '42501';
+  END IF;
+  PERFORM 1 FROM owner_principals p
+   WHERE p.tenant_id = v_tenant_id AND p.caller_id = v_principal_id
+     AND p.disabled_at IS NULL
+   FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'authenticated principal is not active in this tenant'
+      USING ERRCODE = '42501';
+  END IF;
+  PERFORM 1 FROM callers c
+   WHERE c.tenant_id = v_tenant_id AND c.id = p_caller_id
+     AND c.revoked_at IS NULL
+   FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'target caller is not active in this tenant'
+      USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO principal_caller_delegations
+    (delegation_id, tenant_id, principal_id, caller_id)
+  VALUES (v_delegation_id, v_tenant_id, v_principal_id, p_caller_id);
+  RETURN v_delegation_id;
+END
+$grant_caller_delegation$;
+
+CREATE FUNCTION revoke_caller_delegation(p_delegation_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $revoke_caller_delegation$
+DECLARE
+  v_tenant_id UUID := NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+  v_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
+BEGIN
+  IF v_tenant_id IS NULL OR v_principal_id IS NULL THEN
+    RAISE EXCEPTION 'tenant and authenticated principal context are required'
+      USING ERRCODE = '42501';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM owner_principals p
+     WHERE p.tenant_id = v_tenant_id AND p.caller_id = v_principal_id
+       AND p.disabled_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'authenticated principal is not active in this tenant'
+      USING ERRCODE = '42501';
+  END IF;
+  UPDATE principal_caller_delegations
+     SET revoked_at = clock_timestamp(), revoked_by_principal_id = v_principal_id
+   WHERE delegation_id = p_delegation_id AND tenant_id = v_tenant_id
+     AND principal_id = v_principal_id AND revoked_at IS NULL;
+  RETURN FOUND;
+END
+$revoke_caller_delegation$;
+
+-- Resolve an explicit Caller and hold the delegation plus both lifecycle rows
+-- against concurrent revocation/disable until the caller's transaction commits.
+CREATE FUNCTION resolve_delegated_caller(p_caller_id UUID)
+RETURNS TABLE (delegation_id UUID, caller_id UUID, caller_kind TEXT)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $resolve_delegated_caller$
+DECLARE
+  v_tenant_id UUID := NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+  v_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
+BEGIN
+  IF v_tenant_id IS NULL OR v_principal_id IS NULL THEN
+    RAISE EXCEPTION 'tenant and authenticated principal context are required'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN QUERY
+  SELECT d.delegation_id, c.id, c.caller_kind
+    FROM principal_caller_delegations d
+    JOIN owner_principals p
+      ON p.tenant_id = d.tenant_id AND p.caller_id = d.principal_id
+    JOIN callers c
+      ON c.tenant_id = d.tenant_id AND c.id = d.caller_id
+   WHERE d.tenant_id = v_tenant_id AND d.principal_id = v_principal_id
+     AND d.caller_id = p_caller_id AND d.revoked_at IS NULL
+     AND p.disabled_at IS NULL AND c.revoked_at IS NULL
+   FOR SHARE OF d, p, c;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'no active delegation for this Principal and Caller'
+      USING ERRCODE = '42501';
+  END IF;
+END
+$resolve_delegated_caller$;
 
 CREATE FUNCTION resolve_object_tenant(p_object_id UUID)
 RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
@@ -1125,7 +1271,7 @@ END $$;
 DO $$
 DECLARE f TEXT;
 BEGIN
-  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','resolve_object_tenant(uuid)',
+  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid)',
      'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
      'sweep_expired_reservations(integer)','retention_purge(text,timestamptz,text)'] LOOP
     EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
@@ -1143,6 +1289,7 @@ GRANT SELECT ON embedding_models, tool_definitions, tool_versions, tenants, prin
 -- AUDIT-002: pre-auth lookup for the Rust adapter, read-only and limited to the columns it queries.
 GRANT SELECT (tenant_id, caller_id, principal_kind, disabled_at) ON owner_principals TO qembed_runtime;
 GRANT SELECT (tenant_id, caller_id, token_hash, revoked_at) ON owner_credentials TO qembed_runtime;
+GRANT SELECT ON principal_caller_delegations TO qembed_runtime;
 GRANT SELECT, INSERT, UPDATE ON
   objects, object_versions, callers, object_invocations, invocation_idempotency,
   interaction_messages, knowledge_revisions, knowledge_documents, knowledge_chunks,
@@ -1156,7 +1303,8 @@ GRANT INSERT, UPDATE, DELETE ON kill_switches TO qembed_runtime;
 GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddings,
   knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
 GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
-GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), resolve_object_tenant(uuid),
+GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid),
+  revoke_caller_delegation(uuid), resolve_delegated_caller(uuid), resolve_object_tenant(uuid),
   list_expired_invocation_leases(integer), list_pending_reconciliations(integer),
   sweep_expired_reservations(integer) TO qembed_runtime;
 
@@ -1177,7 +1325,10 @@ GRANT SELECT, INSERT, UPDATE ON owner_credentials TO qembed_admin;  -- provision
 GRANT EXECUTE ON FUNCTION retention_purge(text,timestamptz,text) TO qembed_retention;
 
 -- definer: privileges needed by function bodies (narrow to column grants in review)
-GRANT SELECT ON principals, objects, object_invocations TO qembed_definer;
+GRANT SELECT ON principals, owner_principals, objects, object_invocations, callers TO qembed_definer;
+GRANT UPDATE (disabled_at) ON owner_principals TO qembed_definer; -- row lock for invocation-time resolution
+GRANT UPDATE (revoked_at) ON callers TO qembed_definer;          -- row lock for invocation-time resolution
+GRANT SELECT, INSERT, UPDATE ON principal_caller_delegations TO qembed_definer;
 GRANT SELECT, UPDATE ON budget_reservations, usage_counters, tool_executions TO qembed_definer;
 GRANT SELECT, DELETE ON interaction_messages, memories, invocation_idempotency,
   tool_command_payloads, outbox_messages TO qembed_definer;

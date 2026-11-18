@@ -678,3 +678,21 @@ integrity. Пункты 9--10 относятся к подготовке и ра
 Этот документ фиксирует результаты read-only аудита на указанную дату.
 Перед реализацией конкретного AUDIT-ID сверяй его с актуальным
 состоянием SQL-репозитория, но не меняй Rust-контракты.
+
+
+------------------------------------------------------------------------
+
+## F-06 — Principal-to-Caller delegation (approved architecture extension)
+
+**Status:** SQL-011 implementation proposed in branch sql-011-principal-caller-delegation; PostgreSQL smoke validation pending.
+
+This is an explicitly approved feature extension, not a remediation of an existing Rust mismatch. The current Rust owner-authentication contract remains unchanged in the SQL PR.
+
+- Keep owner_principals as the authenticated Principal and callers as the invocation Caller; never infer a mapping from UUID equality.
+- Add tenant-scoped principal_caller_delegations with composite FKs, one active grant per Principal/Caller pair, immutable grant history, final revocation, and auditable revoker.
+- Support explicit selection of all existing Caller kinds: Anonymous, Authenticated, and Service. A Principal can delegate to multiple Callers; delegation is direct and non-transitive.
+- Runtime can read mappings but cannot write them directly. SECURITY DEFINER grant/revoke/resolution functions validate trusted app.tenant_id and app.principal_id context. Client DTOs never provide those values.
+- Invocation-time resolution must re-check that Principal and Caller remain active. The begin-invocation transaction must call resolve_delegated_caller(uuid), which locks the active delegation plus Principal and Caller lifecycle rows FOR SHARE until commit; revocation updates the delegation row, serializing the race.
+- Rust follow-up must add trusted Principal transaction context and the resolver/lock before RUST-036 can safely persist object_invocations.caller_id and caller-scoped idempotency.
+
+Do not mark SQL-011 validated until a clean PostgreSQL 16 + pgvector 0.8.0 install and the full smoke suite, including test 07 and the extended SECURITY DEFINER privilege checks, have actually run.
