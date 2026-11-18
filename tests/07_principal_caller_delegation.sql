@@ -38,6 +38,12 @@ SELECT tt.chk('SQL-011 caller kind remains independently represented',
          ON c.tenant_id=d.tenant_id AND c.id=d.caller_id
       WHERE d.principal_id='d1110000-0000-0000-0000-000000000001'
         AND d.revoked_at IS NULL$q$);
+SELECT tt.chk('SQL-011 resolver returns the explicitly delegated Caller',
+ $q$SELECT EXISTS (SELECT 1 FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000001')
+                    WHERE caller_id='d1120000-0000-0000-0000-000000000001'
+                      AND caller_kind='Authenticated')$q$);
+SELECT tt.try('SQL-011 resolver rejects an undelegated Caller','err',
+ $q$SELECT * FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000004')$q$);
 -- Establish a row in tenant B, then prove tenant A cannot read it.
 SELECT set_config('app.tenant_id','d1100000-0000-0000-0000-000000000002',false);
 SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000003',false);
@@ -69,6 +75,8 @@ SELECT tt.chk('SQL-011 revocation records actor and is effective',
           AND revoked_by_principal_id='d1110000-0000-0000-0000-000000000001'
        FROM principal_caller_delegations
       WHERE delegation_id=current_setting('app.sql011_auth_delegation')::uuid$q$);
+SELECT tt.try('SQL-011 resolver rejects a revoked delegation','err',
+ $q$SELECT * FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000001')$q$);
 SELECT set_config('app.sql011_regrant',grant_caller_delegation('d1120000-0000-0000-0000-000000000001')::text,false);
 SELECT tt.chk('SQL-011 re-grant creates a new active historical record',
  $q$SELECT count(*)=2 AND count(*) FILTER (WHERE revoked_at IS NULL)=1
@@ -111,6 +119,8 @@ SELECT set_config('app.tenant_id','d1100000-0000-0000-0000-000000000001',false);
 SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000001',false);
 SELECT tt.try('SQL-011 revoked Caller cannot receive a new delegation','err',
  $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000002')$q$);
+SELECT tt.try('SQL-011 resolver rejects a revoked Caller','err',
+ $q$SELECT * FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000002')$q$);
 RESET ROLE;
 
 -- Disabled principals cannot create new delegations.
@@ -122,4 +132,6 @@ SELECT set_config('app.tenant_id','d1100000-0000-0000-0000-000000000001',false);
 SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000001',false);
 SELECT tt.try('SQL-011 disabled principal cannot create delegation','err',
  $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000002')$q$);
+SELECT tt.try('SQL-011 disabled principal cannot resolve a delegated Caller','err',
+ $q$SELECT * FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000001')$q$);
 RESET ROLE;
