@@ -38,9 +38,18 @@ SELECT tt.chk('AUDIT-001/004 column contract (type, NOT NULL, default) of Rust c
    ('snapshots','created_at','timestamp with time zone',true,'now()'),
    ('events','tenant_id','uuid',true,NULL),
    ('events','event_id','uuid',true,NULL),
+   ('events','aggregate_type','text',true,NULL),
+   ('events','aggregate_id','uuid',true,NULL),
+   ('events','event_type','text',true,NULL),
+   ('events','payload','jsonb',true,NULL),
+   ('events','occurred_at','timestamp with time zone',true,'now()'),
    ('outbox_messages','tenant_id','uuid',true,NULL),
    ('outbox_messages','delivery_id','uuid',true,NULL),
-   ('outbox_messages','event_id','uuid',true,NULL)
+   ('outbox_messages','event_id','uuid',true,NULL),
+   ('outbox_messages','topic','text',true,NULL),
+   ('outbox_messages','payload','jsonb',true,NULL),
+   ('outbox_messages','created_at','timestamp with time zone',true,'now()'),
+   ('outbox_messages','delivered_at','timestamp with time zone',false,NULL)
  ), have AS (
    SELECT c.relname t, a.attname c, format_type(a.atttypid,a.atttypmod) ty, a.attnotnull nn,
           pg_get_expr(d.adbin,d.adrelid) def
@@ -65,6 +74,7 @@ SELECT tt.chk('AUDIT-001 PK/UNIQUE/FK column lists match the Rust constraints',
    ('events','p','tenant_id,event_id',NULL,NULL),
    ('events','u','event_id',NULL,NULL),
    ('outbox_messages','p','tenant_id,delivery_id',NULL,NULL),
+   ('outbox_messages','u','tenant_id,event_id',NULL,NULL),
    ('outbox_messages','f','tenant_id,event_id','events','tenant_id,event_id')
  ), have AS (
    SELECT c.relname t, k.contype::text ty,
