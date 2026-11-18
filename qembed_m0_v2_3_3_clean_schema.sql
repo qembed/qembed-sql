@@ -1018,7 +1018,7 @@ BEGIN
      AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
      AND c.relname NOT IN ('embedding_models','tool_definitions','tool_versions',
                            'rate_limit_buckets','retention_log',
-                           'owner_principals','owner_credentials');   -- AUDIT-002: pre-auth, grants-only (revisit in AUDIT-006)
+                           'owner_principals','owner_credentials');   -- AUDIT-002/006: pre-auth lookup has no Scope; enforce its narrow column grants instead of tenant RLS.
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'RLS/FORCE missing on: %', bad; END IF;
 END $$;
 
