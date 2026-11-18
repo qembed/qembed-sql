@@ -11,7 +11,7 @@ P="psql -X -q -v ON_ERROR_STOP=1 -d $DB"
 psql -X -q -d postgres -c "DROP DATABASE IF EXISTS $DB" -c "CREATE DATABASE $DB" || exit 2
 $P -f "$SCHEMA" || { echo "SCHEMA APPLY FAILED"; exit 2; }
 psql -X -q -d $DB -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='rt_login') THEN CREATE ROLE rt_login LOGIN PASSWORD 'x' IN ROLE qembed_runtime; END IF; END \$\$" >/dev/null
-for f in 00_harness.sql 01_fixtures.sql 05_rust_physical_contract.sql 06_owner_authentication.sql 10_objects_rls.sql 20_invocations_memory_tools.sql 30_roles_knowledge_retention.sql 40_unknown_admin_hnsw.sql; do
+for f in 00_harness.sql 01_fixtures.sql 05_rust_physical_contract.sql 06_owner_authentication.sql 10_objects_rls.sql 15_snapshots.sql 20_invocations_memory_tools.sql 30_roles_knowledge_retention.sql 40_unknown_admin_hnsw.sql; do
   psql -X -q -t -A -d $DB -f "$f" >/dev/null 2>/tmp/smoke_err.$$ || { echo "ERROR in $f"; cat /tmp/smoke_err.$$; }
 done
 # real login: runtime must not be able to SET ROLE qembed_definer
