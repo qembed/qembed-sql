@@ -34,6 +34,7 @@ SELECT tt.chk('AUDIT-001 column contract (type, NOT NULL, default) of Rust colum
    ('snapshots','schema_version','integer',true,NULL),
    ('snapshots','canonical_json','bytea',true,NULL),
    ('snapshots','content_hash','bytea',true,NULL),
+   ('snapshots','json_projection','jsonb',true,NULL),
    ('snapshots','created_at','timestamp with time zone',true,'now()'),
    ('events','tenant_id','uuid',true,NULL),
    ('events','event_id','uuid',true,NULL),
