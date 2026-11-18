@@ -70,8 +70,15 @@ SELECT tt.try('AUDIT-008 owner credential cannot cross tenant principal boundary
             decode(repeat('19',32),'hex'))$q$);
 
 -- The composite published pointer must also bind tenant AND object identity.
+INSERT INTO objects(tenant_id,object_id,state)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+        '19000000-0000-0000-0000-000000000008','draft');
+UPDATE objects SET state='validating'
+ WHERE tenant_id='aaaaaaaa-0000-0000-0000-000000000001'
+   AND object_id='19000000-0000-0000-0000-000000000008';
 SELECT tt.try('AUDIT-008 published pointer cannot target another tenant version','err',
- $q$UPDATE objects SET published_version_id='19000000-0000-0000-0000-000000000002'
+ $q$UPDATE objects SET state='active',
+       published_version_id='19000000-0000-0000-0000-000000000002'
     WHERE tenant_id='aaaaaaaa-0000-0000-0000-000000000001'
-      AND object_id='0b000000-0000-0000-0000-000000000001';
+      AND object_id='19000000-0000-0000-0000-000000000008';
    SET CONSTRAINTS objects_published_version_fk IMMEDIATE$q$);
