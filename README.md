@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `3c70c86162d4d3cd10103d1e3824c74b5fc1d6aad65c93366804656037b6bb5a`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `834a19eee28e74c66da40f847a64150e4fe02b72174288273a86f57ecdd90476`.
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -42,7 +42,8 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-004 snapshots | **применён** (canonical bytes, hash, JSONB projection, immutability) |
 | AUDIT-005 events/outbox | **применён** (Rust columns, append-only events, delivery timestamp) |
 | AUDIT-006 tenant RLS | **применён** (ENABLE/FORCE, actual-table isolation tests, pre-auth exception) |
-| AUDIT-007 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-007 ObjectVersion / object lifecycle | **применён** (строгие переходы статусов и неизменяемая identity) |
+| AUDIT-008 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -56,7 +57,7 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Остаются расхождения, закрываемые следующими аудитами: object lifecycle guards и дальнейшие расширения (007+).
+Остаются расхождения, закрываемые следующими аудитами: composite tenant FKs и дальнейшие расширения (008+).
 
 
 ### AUDIT-002: owner authentication
@@ -98,3 +99,11 @@ Rust-репозиторий — неизменяемый источник кон
 - Removed an obsolete r3 snapshot trigger that referenced projection columns no longer present in the Rust snapshot schema. The AUDIT-004 `snapshots_projection_guard` is the sole projection guard.
 - Rust's `TenantTransaction` establishes `app.tenant_id` transaction-locally using a bound parameter. RLS enforces that trusted transaction context; it is not an independent defense against arbitrary SQL executed with the runtime database role, which must remain application-internal.
 - Regression coverage is in `tests/17_tenant_rls.sql`, wired into `tests/run_smoke.sh`.
+
+
+### AUDIT-007: ObjectVersion и object lifecycle guards
+- ObjectVersion transitions соответствуют Rust domain: `draft → published → superseded`; обратные переходы и выход из terminal `superseded` запрещены.
+- Version identity, `version_number` и `created_at` неизменяемы; Published content нельзя менять при supersede. Удалять можно только Draft.
+- Object state transitions соответствуют `ObjectState::can_transition_to`: Draft→Validating, Validating→Draft/Active, Active↔Suspended, Active/Suspended→Archived. Archived terminal.
+- Pointer-only updates остаются допустимыми для атомарной публикации/замены; существующий pointer guard проверяет принадлежность и Published status целевой версии.
+- Regression coverage: `tests/18_object_lifecycle.sql`, подключён в smoke runner.
