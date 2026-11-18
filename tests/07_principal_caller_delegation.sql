@@ -38,6 +38,12 @@ SELECT tt.chk('SQL-011 caller kind remains independently represented',
          ON c.tenant_id=d.tenant_id AND c.id=d.caller_id
       WHERE d.principal_id='d1110000-0000-0000-0000-000000000001'
         AND d.revoked_at IS NULL$q$);
+-- Establish a row in tenant B, then prove tenant A cannot read it.
+SELECT set_config('app.tenant_id','d1100000-0000-0000-0000-000000000002',false);
+SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000003',false);
+SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000004');
+SELECT set_config('app.tenant_id','d1100000-0000-0000-0000-000000000001',false);
+SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000001',false);
 SELECT tt.try('SQL-011 duplicate active delegation rejected','err',
  $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000001')$q$);
 SELECT tt.try('SQL-011 cross-tenant Caller cannot be delegated','err',
