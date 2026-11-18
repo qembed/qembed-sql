@@ -160,14 +160,14 @@ CREATE TRIGGER trg_owner_credentials_guard BEFORE UPDATE ON owner_credentials
 CREATE TABLE objects (
   tenant_id UUID NOT NULL,
   object_id UUID NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('Draft','Validating','Active','Suspended','Archived')),  -- AUDIT-003: lowercase
+  state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft','validating','active','suspended','archived')),  -- AUDIT-003: Rust contract
   published_version_id UUID,
   binding_counter BIGINT NOT NULL DEFAULT 0 CHECK (binding_counter >= 0), -- A9 (future extension, defaulted)
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, object_id),
   UNIQUE (object_id),
-  CHECK (state NOT IN ('Active','Suspended') OR published_version_id IS NOT NULL)
+  CHECK (state NOT IN ('active','suspended') OR published_version_id IS NOT NULL)
 );
 
 -- AUDIT-001: columns/keys follow Rust migration 20261118000001_objects.sql.
@@ -188,7 +188,6 @@ CREATE TABLE object_versions (
   FOREIGN KEY (tenant_id, object_id) REFERENCES objects(tenant_id, object_id)
     ON DELETE RESTRICT
 );
-CREATE UNIQUE INDEX uq_ov_one_draft ON object_versions (tenant_id, object_id) WHERE status = 'draft';
 CREATE UNIQUE INDEX uq_ov_one_published ON object_versions (tenant_id, object_id) WHERE status = 'published';
 
 ALTER TABLE objects
@@ -1165,7 +1164,7 @@ LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 DECLARE st TEXT;
 BEGIN
   IF NEW.published_version_id IS NULL THEN
-    IF NEW.state IN ('Active','Suspended') THEN RAISE EXCEPTION 'active object requires published version'; END IF;
+    IF NEW.state IN ('active','suspended') THEN RAISE EXCEPTION 'active object requires published version'; END IF;
     RETURN NEW;
   END IF;
   SELECT status INTO st FROM object_versions

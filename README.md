@@ -38,7 +38,8 @@ Rust-репозиторий — неизменяемый источник кон
 |---|---|
 | AUDIT-001 физические имена/ключи | **применён** (этот патч) |
 | AUDIT-002 owner authentication | **применён** (`owner_principals`, `owner_credentials`) |
-| AUDIT-003 … AUDIT-010 | не применены, отдельные патчи |
+| AUDIT-003 object state / Draft versions | **применён** (lowercase state, multiple Draft versions) |
+| AUDIT-004 … AUDIT-010 | не применены, отдельные патчи |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -52,8 +53,8 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Остаются расхождения, закрываемые следующими аудитами: значения `objects.state` и индекс одной Draft-версии (003),
-`snapshots.json_projection` и обязательные projection-колонки (004), состав колонок `events`/`outbox_messages` (005).
+Остаются расхождения, закрываемые следующими аудитами: `snapshots.json_projection` и обязательные projection-колонки (004),
+состав колонок `events`/`outbox_messages` (005).
 
 
 ### AUDIT-002: owner authentication

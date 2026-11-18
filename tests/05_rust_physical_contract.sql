@@ -20,7 +20,7 @@ SELECT tt.chk('AUDIT-001 column contract (type, NOT NULL, default) of Rust colum
    ('objects','object_id','uuid',true,NULL),
    ('objects','published_version_id','uuid',false,NULL),
    ('objects','created_at','timestamp with time zone',true,'now()'),
-   ('objects','state','text',true,NULL),
+   ('objects','state','text',true,'''draft''::text'),
    ('object_versions','tenant_id','uuid',true,NULL),
    ('object_versions','object_id','uuid',true,NULL),
    ('object_versions','object_version_id','uuid',true,NULL),
@@ -96,7 +96,7 @@ DECLARE ok boolean := false; d text := '';
 BEGIN
   BEGIN
     INSERT INTO objects(tenant_id,object_id,state)
-      VALUES ('aaaaaaaa-0000-0000-0000-000000000001','0a1c0000-0000-0000-0000-000000000001','Draft');
+      VALUES ('aaaaaaaa-0000-0000-0000-000000000001','0a1c0000-0000-0000-0000-000000000001','draft');
     INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number)
       VALUES ('aaaaaaaa-0000-0000-0000-000000000001','0a1c0000-0000-0000-0000-000000000001',
               '0a1c0000-0000-0000-0000-0000000000a1',1);
