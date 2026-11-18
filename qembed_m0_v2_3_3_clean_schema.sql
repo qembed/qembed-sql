@@ -1089,16 +1089,16 @@ CREATE POLICY admin_knowledge_revisions_ins ON knowledge_revisions FOR INSERT TO
 -- -----------------------------------------------------------------------------
 CREATE FUNCTION authenticate_principal(p_key_hash BYTEA)
 RETURNS TABLE (principal_id UUID, tenant_id UUID, kind TEXT)
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $authenticate_principal$
   SELECT id, tenant_id, kind FROM principals WHERE key_hash = p_key_hash AND revoked_at IS NULL
-$;
+$authenticate_principal$;
 
 -- These functions trust app.tenant_id and app.principal_id only when set by the
 -- authenticated application transaction. The runtime role has no direct DML grant
 -- on the delegation table.
 CREATE FUNCTION grant_caller_delegation(p_caller_id UUID)
 RETURNS UUID
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $grant_caller_delegation$
 DECLARE
   v_tenant_id UUID := NULLIF(current_setting('app.tenant_id', true), '')::uuid;
   v_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
@@ -1128,11 +1128,12 @@ BEGIN
     (delegation_id, tenant_id, principal_id, caller_id)
   VALUES (v_delegation_id, v_tenant_id, v_principal_id, p_caller_id);
   RETURN v_delegation_id;
-END $;
+END
+$grant_caller_delegation$;
 
 CREATE FUNCTION revoke_caller_delegation(p_delegation_id UUID)
 RETURNS BOOLEAN
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $revoke_caller_delegation$
 DECLARE
   v_tenant_id UUID := NULLIF(current_setting('app.tenant_id', true), '')::uuid;
   v_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
@@ -1154,7 +1155,8 @@ BEGIN
    WHERE delegation_id = p_delegation_id AND tenant_id = v_tenant_id
      AND principal_id = v_principal_id AND revoked_at IS NULL;
   RETURN FOUND;
-END $;
+END
+$revoke_caller_delegation$;
 
 CREATE FUNCTION resolve_object_tenant(p_object_id UUID)
 RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
