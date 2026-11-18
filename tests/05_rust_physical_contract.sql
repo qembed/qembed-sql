@@ -107,3 +107,36 @@ BEGIN
   END;
   INSERT INTO tt.res VALUES ('AUDIT-001 Rust-shaped object + object_version INSERT accepted','true',ok::text,ok,d);
 END $$;
+
+
+-- AUDIT-003: Rust object state vocabulary/default and multiple concurrent Draft candidates.
+SELECT tt.chk('AUDIT-003 no unique one-Draft-per-object index remains',
+ $q$SELECT count(*)=0 FROM pg_indexes
+    WHERE schemaname='public' AND tablename='object_versions'
+      AND indexdef LIKE 'CREATE UNIQUE INDEX%WHERE (status = ''draft'')'$q$);
+
+SELECT tt.try('AUDIT-003 legacy uppercase object state is rejected','err',
+ $q$INSERT INTO objects(tenant_id,object_id,state)
+    VALUES ('aaaaaaaa-0000-0000-0000-000000000001',gen_random_uuid(),'Draft')$q$);
+
+DO $$
+DECLARE object_state text; draft_count bigint; ok boolean := false; d text := '';
+BEGIN
+  BEGIN
+    INSERT INTO objects(tenant_id,object_id)
+      VALUES ('aaaaaaaa-0000-0000-0000-000000000001','0a1c0000-0000-0000-0000-000000000002')
+      RETURNING state INTO object_state;
+    INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number)
+      VALUES
+       ('aaaaaaaa-0000-0000-0000-000000000001','0a1c0000-0000-0000-0000-000000000002','0a1c0000-0000-0000-0000-0000000000a2',1),
+       ('aaaaaaaa-0000-0000-0000-000000000001','0a1c0000-0000-0000-0000-000000000002','0a1c0000-0000-0000-0000-0000000000a3',2);
+    SELECT count(*) INTO draft_count FROM object_versions
+     WHERE tenant_id='aaaaaaaa-0000-0000-0000-000000000001'
+       AND object_id='0a1c0000-0000-0000-0000-000000000002' AND status='draft';
+    ok := object_state='draft' AND draft_count=2;
+    RAISE EXCEPTION 'probe-rollback';
+  EXCEPTION WHEN others THEN
+    IF SQLERRM <> 'probe-rollback' THEN ok := false; d := SQLSTATE||' '||left(SQLERRM,140); END IF;
+  END;
+  INSERT INTO tt.res VALUES ('AUDIT-003 Rust default state and two Draft versions accepted','true',ok::text,ok,d);
+END $$;
