@@ -202,6 +202,13 @@ ALTER TABLE objects
 CREATE OR REPLACE FUNCTION object_versions_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $object_version_guard$
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status <> 'draft' THEN
+      RAISE EXCEPTION 'new object versions must start as Draft' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
     IF OLD.status <> 'draft' THEN
       RAISE EXCEPTION 'only draft object versions may be deleted' USING ERRCODE = '55000';
@@ -237,7 +244,7 @@ BEGIN
 END
 $object_version_guard$;
 
-CREATE TRIGGER trg_object_versions_guard BEFORE UPDATE OR DELETE ON object_versions
+CREATE TRIGGER trg_object_versions_guard BEFORE INSERT OR UPDATE OR DELETE ON object_versions
   FOR EACH ROW EXECUTE FUNCTION object_versions_guard();
 
 -- Object lifecycle transitions mirror qembed-domain::ObjectState::can_transition_to.
@@ -246,6 +253,14 @@ CREATE TRIGGER trg_object_versions_guard BEFORE UPDATE OR DELETE ON object_versi
 CREATE FUNCTION object_state_transition_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $object_state_guard$
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.state <> 'draft' OR NEW.published_version_id IS NOT NULL THEN
+      RAISE EXCEPTION 'new objects must start as Draft without a published version'
+        USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF (NEW.tenant_id, NEW.object_id, NEW.created_at)
      IS DISTINCT FROM (OLD.tenant_id, OLD.object_id, OLD.created_at) THEN
     RAISE EXCEPTION 'object identity is immutable' USING ERRCODE = '55000';
@@ -280,7 +295,7 @@ BEGIN
 END
 $object_state_guard$;
 CREATE TRIGGER trg_object_state_transition_guard
-  BEFORE UPDATE ON objects FOR EACH ROW
+  BEFORE INSERT OR UPDATE ON objects FOR EACH ROW
   EXECUTE FUNCTION object_state_transition_guard();
 
 -- -----------------------------------------------------------------------------
