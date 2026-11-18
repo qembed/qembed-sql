@@ -4,7 +4,7 @@
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
--- Rust-compat remediation: AUDIT-001..006 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS).
+-- Rust-compat remediation: AUDIT-001..007 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS).
 -- AUDIT-008..010 are separate patches.
 -- =============================================================================
 \set ON_ERROR_STOP on
