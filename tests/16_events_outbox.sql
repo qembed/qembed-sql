@@ -20,13 +20,19 @@ SELECT tt.chk('AUDIT-005 pending outbox index matches delivered_at predicate',
    AND indexdef LIKE '%(created_at, delivery_id)%' AND indexdef LIKE '%WHERE (delivered_at IS NULL)%')$q$);
 
 DO $$
-DECLARE eid uuid := gen_random_uuid(); did uuid := gen_random_uuid(); tid uuid := 'aaaaaaaa-0000-0000-0000-000000000001';
+DECLARE eid uuid := gen_random_uuid(); did uuid := gen_random_uuid();
+        pending_eid uuid := gen_random_uuid(); pending_did uuid := gen_random_uuid();
+        tid uuid := 'aaaaaaaa-0000-0000-0000-000000000001';
         got_state text; ok boolean := false;
 BEGIN
   INSERT INTO events(tenant_id,event_id,aggregate_type,aggregate_id,event_type,payload)
     VALUES(tid,eid,'object','0b000000-0000-0000-0000-000000000001','object.created','{"v":1}');
   INSERT INTO outbox_messages(tenant_id,delivery_id,event_id,topic,payload)
     VALUES(tid,did,eid,'object.events','{"v":1}');
+  INSERT INTO events(tenant_id,event_id,aggregate_type,aggregate_id,event_type,payload)
+    VALUES(tid,pending_eid,'object','0b000000-0000-0000-0000-000000000001','object.updated','{"v":2}');
+  INSERT INTO outbox_messages(tenant_id,delivery_id,event_id,topic,payload)
+    VALUES(tid,pending_did,pending_eid,'object.events','{"v":2}');
   INSERT INTO tt.res VALUES ('AUDIT-005 Rust-shaped event and outbox inserts accepted','ok','ok',true,'');
 
   BEGIN
@@ -57,9 +63,12 @@ BEGIN
   END;
   -- Pending rows must remain undelivered; the dispatcher updates only delivered_at.
   UPDATE outbox_messages SET created_at=now()-interval '2 days'
-    WHERE tenant_id=tid AND delivery_id=did;
+    WHERE tenant_id=tid AND delivery_id IN (did,pending_did);
   UPDATE outbox_messages SET delivered_at=now()
     WHERE tenant_id=tid AND delivery_id=did;
   SELECT delivered_at IS NOT NULL INTO ok FROM outbox_messages WHERE tenant_id=tid AND delivery_id=did;
   INSERT INTO tt.res VALUES ('AUDIT-005 delivered_at marks successful delivery','true',ok::text,ok,'');
+  INSERT INTO tt.res VALUES ('AUDIT-005 pending delivery remains undelivered','true',
+    (SELECT (delivered_at IS NULL)::text FROM outbox_messages WHERE tenant_id=tid AND delivery_id=pending_did),
+    EXISTS (SELECT 1 FROM outbox_messages WHERE tenant_id=tid AND delivery_id=pending_did AND delivered_at IS NULL),'');
 END $$;
