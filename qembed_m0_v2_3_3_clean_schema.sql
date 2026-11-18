@@ -1108,19 +1108,19 @@ BEGIN
     RAISE EXCEPTION 'tenant and authenticated principal context are required'
       USING ERRCODE = '42501';
   END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM owner_principals p
-     WHERE p.tenant_id = v_tenant_id AND p.caller_id = v_principal_id
-       AND p.disabled_at IS NULL
-  ) THEN
+  PERFORM 1 FROM owner_principals p
+   WHERE p.tenant_id = v_tenant_id AND p.caller_id = v_principal_id
+     AND p.disabled_at IS NULL
+   FOR SHARE;
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'authenticated principal is not active in this tenant'
       USING ERRCODE = '42501';
   END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM callers c
-     WHERE c.tenant_id = v_tenant_id AND c.id = p_caller_id
-       AND c.revoked_at IS NULL
-  ) THEN
+  PERFORM 1 FROM callers c
+   WHERE c.tenant_id = v_tenant_id AND c.id = p_caller_id
+     AND c.revoked_at IS NULL
+   FOR SHARE;
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'target caller is not active in this tenant'
       USING ERRCODE = '42501';
   END IF;
