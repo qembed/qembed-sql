@@ -340,7 +340,7 @@ CREATE UNIQUE INDEX principal_caller_delegations_active
   WHERE revoked_at IS NULL;
 
 CREATE FUNCTION principal_caller_delegation_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $delegation_guard$
 BEGIN
   IF TG_OP = 'UPDATE' THEN
     IF (NEW.delegation_id, NEW.tenant_id, NEW.principal_id, NEW.caller_id, NEW.granted_at)
@@ -357,7 +357,8 @@ BEGIN
     RAISE EXCEPTION 'delegation history is append-only' USING ERRCODE = '55000';
   END IF;
   RETURN NEW;
-END $;
+END
+$delegation_guard$;
 CREATE TRIGGER trg_principal_caller_delegation_guard
   BEFORE UPDATE OR DELETE ON principal_caller_delegations
   FOR EACH ROW EXECUTE FUNCTION principal_caller_delegation_guard();
@@ -1029,7 +1030,8 @@ BEGIN
     'memory_conflicts','memory_embeddings','object_tools','policy_decisions',
     'tool_command_payloads','tool_executions','events','outbox_messages','object_budgets',
     'budget_reservations','usage_counters','caller_usage_counters','budget_event_dedup',
-    'object_goals','object_tasks','deletion_jobs','deletion_ledger',\n    'principal_caller_delegations']
+    'object_goals','object_tasks','deletion_jobs','deletion_ledger',
+    'principal_caller_delegations']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
@@ -1254,6 +1256,7 @@ GRANT SELECT ON embedding_models, tool_definitions, tool_versions, tenants, prin
 -- AUDIT-002: pre-auth lookup for the Rust adapter, read-only and limited to the columns it queries.
 GRANT SELECT (tenant_id, caller_id, principal_kind, disabled_at) ON owner_principals TO qembed_runtime;
 GRANT SELECT (tenant_id, caller_id, token_hash, revoked_at) ON owner_credentials TO qembed_runtime;
+GRANT SELECT ON principal_caller_delegations TO qembed_runtime;
 GRANT SELECT, INSERT, UPDATE ON
   objects, object_versions, callers, object_invocations, invocation_idempotency,
   interaction_messages, knowledge_revisions, knowledge_documents, knowledge_chunks,
@@ -1267,7 +1270,8 @@ GRANT INSERT, UPDATE, DELETE ON kill_switches TO qembed_runtime;
 GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddings,
   knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
 GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
-GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid),\n  revoke_caller_delegation(uuid), resolve_object_tenant(uuid),
+GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid),
+  revoke_caller_delegation(uuid), resolve_object_tenant(uuid),
   list_expired_invocation_leases(integer), list_pending_reconciliations(integer),
   sweep_expired_reservations(integer) TO qembed_runtime;
 
@@ -1288,7 +1292,8 @@ GRANT SELECT, INSERT, UPDATE ON owner_credentials TO qembed_admin;  -- provision
 GRANT EXECUTE ON FUNCTION retention_purge(text,timestamptz,text) TO qembed_retention;
 
 -- definer: privileges needed by function bodies (narrow to column grants in review)
-GRANT SELECT ON principals, owner_principals, objects, object_invocations, callers TO qembed_definer;\nGRANT SELECT, INSERT, UPDATE ON principal_caller_delegations TO qembed_definer;
+GRANT SELECT ON principals, owner_principals, objects, object_invocations, callers TO qembed_definer;
+GRANT SELECT, INSERT, UPDATE ON principal_caller_delegations TO qembed_definer;
 GRANT SELECT, UPDATE ON budget_reservations, usage_counters, tool_executions TO qembed_definer;
 GRANT SELECT, DELETE ON interaction_messages, memories, invocation_idempotency,
   tool_command_payloads, outbox_messages TO qembed_definer;
