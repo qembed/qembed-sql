@@ -929,7 +929,7 @@ CREATE TABLE provider_call_attempts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, object_id, invocation_id),
   FOREIGN KEY (tenant_id, object_id, invocation_id)
-    REFERENCES object_invocations (tenant_id, object_id, id) ON DELETE RESTRICT,
+    REFERENCES object_invocations (tenant_id, object_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
   CHECK ((input_tokens IS NULL) = (output_tokens IS NULL)),
   CHECK (state = 'ResponseReceived' OR (input_tokens IS NULL AND output_tokens IS NULL))
 );
@@ -1128,7 +1128,7 @@ DO $$
 DECLARE t TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY['objects','object_invocations','callers','principal_caller_delegations','budget_reservations',
-      'usage_counters','caller_usage_counters','tool_executions','tool_command_payloads',
+      'provider_call_attempts','usage_counters','caller_usage_counters','tool_executions','tool_command_payloads',
       'interaction_messages','memories','invocation_idempotency','outbox_messages'] LOOP
     EXECUTE format('CREATE POLICY definer_access ON %I TO qembed_definer USING (true) WITH CHECK (true)', t);
   END LOOP;
