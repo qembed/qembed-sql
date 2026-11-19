@@ -105,3 +105,15 @@ Known schema gaps (не исправлялись в r3, нужны решени�
 3. Acceptance stages corrected: T-03→M3, T-06/T-14→M1a, T-24→M1b; T-04/T-21/T-27 split DB-level/app path.
 4. Tool-enablement gate list deduplicated.
 5. README manifest and validation status aligned with actual files; consolidated PDF re-rendered (Cyrillic and markdown were not rendered on pages 1–2).
+
+
+**Normative provider-usage settlement policy (RUST-041c):**
+
+1. After a provider adapter returns, normalized `TokenUsage(input_tokens, output_tokens)` is authoritative. Settlement replaces the reservation estimate with `input_tokens + output_tokens`; it MUST NOT add actual usage on top of the estimate.
+2. Provider usage metadata is optional. Missing or malformed usage (wrong shape, negative/fractional counts, missing required members, or values outside the normalized integer range) is treated as unavailable, never coerced to zero. The runtime settles the original non-zero reservation estimate and records an explicit degraded reason (`provider_usage_missing`). A valid normalized usage value of zero is not synthesized by fallback logic.
+3. Settlement is one tenant-scoped PostgreSQL transaction. It MUST use the same lock order as reservation: tenant/object `object_budgets` row; matching object/pool/UTC-date `usage_counters` row; matching caller/UTC-date `caller_usage_counters` row; then `budget_reservations` row. All counter and reservation changes commit or roll back together.
+4. Settlement subtracts the original `reserved_tokens` from both object/pool and caller reserved counters, adds the final actual token amount to both consumed counters, stores `budget_reservations.actual_tokens`, and transitions the reservation from `Reserved` to `Settled`.
+5. A reservation already in `Settled` is immutable. Repeated settlement MUST return the persisted actual amount and degraded outcome without changing either counter, regardless of a retry's in-memory usage value. A reservation in `Released` or `Expired` is not eligible for settlement; its lifecycle is handled by reconciliation.
+6. Provider-reported usage is recorded as reported, even if it exceeds the original estimate. The runtime MUST NOT clamp or rewrite actual usage to make counters appear within budget. Such overage increases consumed counters and therefore reduces/rejects capacity for subsequent reservations. Any provider usage above the effective per-invocation ceiling is an operational discrepancy; accounting still records the provider-reported value.
+7. When usage is unavailable, the invocation carries `degraded_reason='provider_usage_missing'` and successful completion MUST be represented as `CompletedDegraded`, not `Completed`.
+8. RUST-041c does not settle cost, release reservations after failures, or resolve ambiguous provider outcomes. Cost accounting requires its own contract; timeout/crash/cancellation reconciliation is RUST-041d. Missing response or usage is not evidence that the provider consumed zero tokens.
