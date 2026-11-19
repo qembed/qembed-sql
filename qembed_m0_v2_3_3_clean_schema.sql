@@ -1282,7 +1282,7 @@ BEGIN
              AND pca.invocation_id = br.invocation_id
             WHERE br.status = 'Reserved' AND br.expires_at < now()
               AND pca.state IN ('NotStarted','ConfirmedNotAccepted','CancelledBeforeSend')
-            ORDER BY br.expires_at LIMIT p_limit FOR UPDATE OF br SKIP LOCKED
+            ORDER BY br.expires_at LIMIT p_limit FOR UPDATE OF pca SKIP LOCKED
   LOOP
     UPDATE budget_reservations SET status = 'Expired' WHERE id = r.id AND status = 'Reserved';
     UPDATE usage_counters
