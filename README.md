@@ -1,7 +1,7 @@
 # Qembed M0 v2.3.3 (r3) Finalization Pack
 
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. SHA-256: `0236b9f01373b024b27999eb064bb42f019683808bc0c3ebcc09a0bf63c96b30`.
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. (recompute SHA-256 after this RUST-041d DDL extension).
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
@@ -185,3 +185,8 @@ The schema now keeps the authenticated owner Principal (owner_principals) separa
 Runtime resolves the selected Caller through resolve_delegated_caller(uuid), which checks Principal and Caller lifecycle state and locks the relevant rows until the begin-invocation transaction commits. The runtime role cannot write delegation rows directly: it uses narrow SECURITY DEFINER grant/revoke functions with trusted app.tenant_id and app.principal_id transaction context. See ADR_RT-049_Principal_Caller_Delegation.md and tests/07_principal_caller_delegation.sql.
 
 SQL-011 is a schema extension, not a change to the existing Rust owner-authentication contract. Rust integration must set trusted Principal context and lock the active delegation row FOR SHARE in the same begin-invocation transaction, so revocation and invocation start are serialized.
+
+
+## RUST-041d — provider call outcome and reservation safety
+
+The canonical schema now records a provider-call attempt for every committed token reservation. The durable `NotStarted → MayHaveBeenSent` boundary prevents the expiry sweeper from releasing a reservation after a request may have reached a provider. Unknown outcomes remain reserved; only a pre-send cancellation or explicit provider confirmation of non-acceptance is eligible for expiry. See the RUST-041d policy in the finalization addendum and `tests/23_provider_call_reconciliation.sql`.
