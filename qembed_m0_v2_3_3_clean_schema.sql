@@ -917,6 +917,63 @@ CREATE TABLE budget_reservations (
     REFERENCES object_invocations(tenant_id, object_id, id, pool) DEFERRABLE INITIALLY DEFERRED
 );
 CREATE INDEX idx_resv_sweep ON budget_reservations (expires_at) WHERE status = 'Reserved';
+CREATE TABLE provider_call_attempts (
+  tenant_id UUID NOT NULL,
+  object_id UUID NOT NULL,
+  invocation_id UUID NOT NULL,
+  state TEXT NOT NULL DEFAULT 'NotStarted'
+    CHECK (state IN ('NotStarted','MayHaveBeenSent','ResponseReceived',
+                     'ConfirmedNotAccepted','OutcomeUnknown','CancelledBeforeSend')),
+  input_tokens BIGINT CHECK (input_tokens >= 0),
+  output_tokens BIGINT CHECK (output_tokens >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, object_id, invocation_id),
+  FOREIGN KEY (tenant_id, object_id, invocation_id)
+    REFERENCES object_invocations (tenant_id, object_id, id) ON DELETE RESTRICT,
+  CHECK ((input_tokens IS NULL) = (output_tokens IS NULL)),
+  CHECK (state = 'ResponseReceived' OR (input_tokens IS NULL AND output_tokens IS NULL))
+);
+
+-- Every committed reservation gets a durable pre-send marker in the same transaction.
+-- Missing attempt rows are treated conservatively by the sweeper (never auto-released).
+CREATE FUNCTION create_provider_call_attempt() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+BEGIN
+  INSERT INTO provider_call_attempts (tenant_id, object_id, invocation_id, state)
+  VALUES (NEW.tenant_id, NEW.object_id, NEW.invocation_id, 'NotStarted');
+  RETURN NEW;
+END $;
+CREATE TRIGGER trg_budget_reservation_provider_attempt
+  AFTER INSERT ON budget_reservations FOR EACH ROW
+  EXECUTE FUNCTION create_provider_call_attempt();
+
+CREATE FUNCTION provider_call_attempt_state_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+BEGIN
+  IF (NEW.tenant_id, NEW.object_id, NEW.invocation_id)
+     IS DISTINCT FROM (OLD.tenant_id, OLD.object_id, OLD.invocation_id) THEN
+    RAISE EXCEPTION 'provider call attempt identity is immutable' USING ERRCODE = '55000';
+  END IF;
+  IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
+       (OLD.state = 'NotStarted' AND NEW.state IN ('MayHaveBeenSent','CancelledBeforeSend'))
+    OR (OLD.state = 'MayHaveBeenSent' AND NEW.state IN ('ResponseReceived','ConfirmedNotAccepted','OutcomeUnknown'))
+    OR (OLD.state = 'OutcomeUnknown' AND NEW.state IN ('ResponseReceived','ConfirmedNotAccepted'))
+  ) THEN
+    RAISE EXCEPTION 'invalid provider call attempt transition: % -> %', OLD.state, NEW.state
+      USING ERRCODE = '23514';
+  END IF;
+  IF OLD.state = 'ResponseReceived'
+     AND (NEW.input_tokens, NEW.output_tokens) IS DISTINCT FROM (OLD.input_tokens, OLD.output_tokens) THEN
+    RAISE EXCEPTION 'persisted provider usage is immutable' USING ERRCODE = '55000';
+  END IF;
+  IF NEW.state = 'ResponseReceived' AND NEW.updated_at < OLD.updated_at THEN
+    RAISE EXCEPTION 'provider call attempt timestamp cannot move backwards' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $;
+CREATE TRIGGER trg_provider_call_attempt_state_guard
+  BEFORE UPDATE ON provider_call_attempts FOR EACH ROW
+  EXECUTE FUNCTION provider_call_attempt_state_guard();
 
 CREATE TABLE usage_counters (
   tenant_id UUID NOT NULL, object_id UUID NOT NULL, usage_date DATE NOT NULL,
@@ -1029,7 +1086,7 @@ BEGIN
     'knowledge_documents','knowledge_chunks','knowledge_chunk_embeddings','memories',
     'memory_conflicts','memory_embeddings','object_tools','policy_decisions',
     'tool_command_payloads','tool_executions','events','outbox_messages','object_budgets',
-    'budget_reservations','usage_counters','caller_usage_counters','budget_event_dedup',
+    'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters','budget_event_dedup',
     'object_goals','object_tasks','deletion_jobs','deletion_ledger',
     'principal_caller_delegations']
   LOOP
@@ -1219,9 +1276,13 @@ CREATE FUNCTION sweep_expired_reservations(p_limit INT) RETURNS INT
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE r RECORD; n INT := 0;
 BEGIN
-  FOR r IN SELECT * FROM budget_reservations
-            WHERE status = 'Reserved' AND expires_at < now()
-            ORDER BY expires_at LIMIT p_limit FOR UPDATE SKIP LOCKED
+  FOR r IN SELECT br.* FROM budget_reservations br
+            JOIN provider_call_attempts pca
+              ON pca.tenant_id = br.tenant_id AND pca.object_id = br.object_id
+             AND pca.invocation_id = br.invocation_id
+            WHERE br.status = 'Reserved' AND br.expires_at < now()
+              AND pca.state IN ('NotStarted','ConfirmedNotAccepted','CancelledBeforeSend')
+            ORDER BY br.expires_at LIMIT p_limit FOR UPDATE OF br SKIP LOCKED
   LOOP
     UPDATE budget_reservations SET status = 'Expired' WHERE id = r.id AND status = 'Reserved';
     UPDATE usage_counters
@@ -1295,7 +1356,7 @@ GRANT SELECT, INSERT, UPDATE ON
   interaction_messages, knowledge_revisions, knowledge_documents, knowledge_chunks,
   knowledge_chunk_embeddings, memories, memory_conflicts, memory_embeddings, object_tools,
   tool_command_payloads, tool_executions, object_budgets, budget_reservations,
-  usage_counters, caller_usage_counters, budget_event_dedup, object_goals, object_tasks,
+  provider_call_attempts, usage_counters, caller_usage_counters, budget_event_dedup, object_goals, object_tasks,
   deletion_jobs TO qembed_runtime;
 GRANT INSERT, SELECT ON knowledge_revision_log, snapshots, policy_decisions, events,
   outbox_messages, deletion_ledger TO qembed_runtime;                   -- append-only/event records: no UPDATE
@@ -1329,7 +1390,7 @@ GRANT SELECT ON principals, owner_principals, objects, object_invocations, calle
 GRANT UPDATE (disabled_at) ON owner_principals TO qembed_definer; -- row lock for invocation-time resolution
 GRANT UPDATE (revoked_at) ON callers TO qembed_definer;          -- row lock for invocation-time resolution
 GRANT SELECT, INSERT, UPDATE ON principal_caller_delegations TO qembed_definer;
-GRANT SELECT, UPDATE ON budget_reservations, usage_counters, tool_executions TO qembed_definer;
+GRANT SELECT, UPDATE ON budget_reservations, provider_call_attempts, usage_counters, tool_executions TO qembed_definer;
 GRANT SELECT, DELETE ON interaction_messages, memories, invocation_idempotency,
   tool_command_payloads, outbox_messages TO qembed_definer;
 GRANT SELECT, UPDATE ON caller_usage_counters TO qembed_definer;   -- r3: sweeper releases per-caller reservations
