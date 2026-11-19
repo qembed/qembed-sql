@@ -937,18 +937,18 @@ CREATE TABLE provider_call_attempts (
 -- Every committed reservation gets a durable pre-send marker in the same transaction.
 -- Missing attempt rows are treated conservatively by the sweeper (never auto-released).
 CREATE FUNCTION create_provider_call_attempt() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $provider_attempt_create$
 BEGIN
   INSERT INTO provider_call_attempts (tenant_id, object_id, invocation_id, state)
   VALUES (NEW.tenant_id, NEW.object_id, NEW.invocation_id, 'NotStarted');
   RETURN NEW;
-END $;
+END $provider_attempt_create$;
 CREATE TRIGGER trg_budget_reservation_provider_attempt
   AFTER INSERT ON budget_reservations FOR EACH ROW
   EXECUTE FUNCTION create_provider_call_attempt();
 
 CREATE FUNCTION provider_call_attempt_state_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $provider_attempt_guard$
 BEGIN
   IF (NEW.tenant_id, NEW.object_id, NEW.invocation_id)
      IS DISTINCT FROM (OLD.tenant_id, OLD.object_id, OLD.invocation_id) THEN
@@ -970,7 +970,7 @@ BEGIN
     RAISE EXCEPTION 'provider call attempt timestamp cannot move backwards' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
-END $;
+END $provider_attempt_guard$;
 CREATE TRIGGER trg_provider_call_attempt_state_guard
   BEFORE UPDATE ON provider_call_attempts FOR EACH ROW
   EXECUTE FUNCTION provider_call_attempt_state_guard();
