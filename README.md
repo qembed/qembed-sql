@@ -185,3 +185,8 @@ The schema now keeps the authenticated owner Principal (owner_principals) separa
 Runtime resolves the selected Caller through resolve_delegated_caller(uuid), which checks Principal and Caller lifecycle state and locks the relevant rows until the begin-invocation transaction commits. The runtime role cannot write delegation rows directly: it uses narrow SECURITY DEFINER grant/revoke functions with trusted app.tenant_id and app.principal_id transaction context. See ADR_RT-049_Principal_Caller_Delegation.md and tests/07_principal_caller_delegation.sql.
 
 SQL-011 is a schema extension, not a change to the existing Rust owner-authentication contract. Rust integration must set trusted Principal context and lock the active delegation row FOR SHARE in the same begin-invocation transaction, so revocation and invocation start are serialized.
+
+
+## RUST-041d — provider call outcome and reservation safety
+
+The canonical schema now records a provider-call attempt for every committed token reservation. The durable `NotStarted → MayHaveBeenSent` boundary prevents the expiry sweeper from releasing a reservation after a request may have reached a provider. Unknown outcomes remain reserved; only a pre-send cancellation or explicit provider confirmation of non-acceptance is eligible for expiry. See the RUST-041d policy in the finalization addendum and `tests/23_provider_call_reconciliation.sql`.
