@@ -1,8 +1,8 @@
 -- RUST-041d: provider-call attempt state and conservative reservation expiry.
-\\set A '''aaaaaaaa-0000-0000-0000-000000000001'''
+\set A '''aaaaaaaa-0000-0000-0000-000000000001'''
 SET client_min_messages=warning;
 SET ROLE qembed_runtime;
-SELECT set_config('app.tenant_id', :A, false) \\gset
+SELECT set_config('app.tenant_id', :A, false) \gset
 
 SELECT tt.chk('RUST-041d reservation creates a NotStarted provider attempt',
   $q$SELECT state='NotStarted' AND input_tokens IS NULL AND output_tokens IS NULL
