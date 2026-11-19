@@ -41,7 +41,7 @@
 | T-31 | Knowledge revision visibility | Retrieval в R исключает future/closed/staged документы | M2 |
 | T-32 | Verifier V1–V7 | Фальшивые chunk_id/числа/ссылки и контрактно обязательные отсутствующие цитаты отклоняются | M2 |
 | T-33 | Budget degradation | С источниками исчерпание бюджета даёт CompletedDegraded; без источников — Failed | M1b |
-| T-34 | Pool isolation | Anonymous не исчерпывает долю Authenticated/Owner | M1b |
+| T-34 | Pool accounting (revised by RUST-041b) | Object daily token ceiling is enforced in aggregate across anonymous and authenticated pools; pool counters remain separate for attribution; no protected anonymous/authenticated share is promised | M1b |
 | T-35 | Deletion restore | После restore ledger проигрывается до открытия трафика; erased data не возвращаются | M1b |
 | T-36 | RLS global roles | Platform kill switch читаем, но не изменяем runtime; dispatcher видит только delivery data | M1a |
 | T-37 | AllowedCommand compile-fail | Вне qembed-domain::policy нельзя сконструировать/клонировать/сериализовать capability | M1a |
