@@ -4,6 +4,7 @@
 - `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r3 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. (recompute SHA-256 after this RUST-041d DDL extension).
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
+- `ADR_RUST-044_Identical_Content_Version_Deduplication.md` — approved application contract for identical canonical content; no DDL change.
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
 - `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40, включая 17_tenant_rls.sql; `05_rust_physical_contract.sql` — контракт физических имён/ключей Rust). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`.
 - `Qembed_Object_Runtime_M0_v2_3_3_FINAL_TZ.pdf`, `Qembed_M0_v2_3_3_Diagrams.pdf` — **не пересобирались, содержимое r1**. Нормативны `.md` (addendum r3 имеет приоритет по §1); PDF с addendum r1 устарел в части §9–§10.
@@ -190,3 +191,8 @@ SQL-011 is a schema extension, not a change to the existing Rust owner-authentic
 ## RUST-041d — provider call outcome and reservation safety
 
 The canonical schema now records a provider-call attempt for every committed token reservation. The durable `NotStarted → MayHaveBeenSent` boundary prevents the expiry sweeper from releasing a reservation after a request may have reached a provider. Unknown outcomes remain reserved; only a pre-send cancellation or explicit provider confirmation of non-acceptance is eligible for expiry. See the RUST-041d policy in the finalization addendum and `tests/23_provider_call_reconciliation.sql`.
+
+
+## RUST-044 — identical-content version creation
+
+Approved contract: for the same tenant/object, an exact canonical-byte match returns `identical_content` with the existing version and snapshot IDs and creates no rows. A matching SHA-256 with different bytes fails closed as an integrity/hash-collision error. Different bytes create a Draft version and snapshot atomically in one tenant-scoped transaction. This preserves the snapshot's exact version binding and the existing unique constraint; no DDL change is made. See `ADR_RUST-044_Identical_Content_Version_Deduplication.md` and the application-level test requirements in that ADR.
