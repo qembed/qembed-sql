@@ -12,7 +12,7 @@
 | T-02 | Изоляция объектов | Запросы/связи object A не пересекаются с object B внутри tenant | M1a |
 | T-03 | Prompt injection из документа | Документ не может повысить policy verdict или вызвать неразрешённый tool | M3 |
 | T-04 | Provenance memory | User/ThirdParty не создаёт Verified/Observed; Verified создаётся отдельной Owner-записью | M1a (DB-level) / M2 (app path) |
-| T-05 | Budget cap | Параллельные резервы и settlement не превышают effective limit | M1b |
+| T-05 | Budget cap | Snapshot `limits.max_tokens_per_invocation` is required and positive; effective limit is min(snapshot cap, live object budget); parallel reservations and settlement never exceed it | M1b |
 | T-06 | Invocation idempotency | Один tenant/object/caller/key даёт один invocation и один reserve | M1a |
 | T-07 | SSRF basics | Запрещённые IP и redirect блокируются до connect | M3 |
 | T-08 | Kill-switch race | После активации kill switch новый side effect не стартует | M1b |
