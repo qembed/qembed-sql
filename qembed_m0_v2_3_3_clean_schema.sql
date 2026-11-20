@@ -1098,6 +1098,15 @@ BEGIN
   END LOOP;
 END $;
 
+-- These tables are excluded from the generic tenant-only policy loop because
+-- their runtime policy also depends on the parent memory's Caller visibility.
+ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memories FORCE ROW LEVEL SECURITY;
+ALTER TABLE memory_embeddings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memory_embeddings FORCE ROW LEVEL SECURITY;
+ALTER TABLE memory_conflicts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memory_conflicts FORCE ROW LEVEL SECURITY;
+
 -- T-27: semantic memory remains tenant-scoped; episodic memory is Caller-scoped.
 -- Missing app.caller_id fails closed for episodic rows.
 CREATE POLICY tenant_isolation ON memories TO qembed_runtime
