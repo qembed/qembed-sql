@@ -9,6 +9,15 @@ on:
 
 jobs:
   postgres-smoke:
+    name: PostgreSQL ${{ matrix.postgres }} / pgvector 0.8.7
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - postgres: "15"
+            image: pgvector/pgvector:0.8.7-pg15-bookworm
+          - postgres: "16"
+            image: \${{ matrix.image }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
