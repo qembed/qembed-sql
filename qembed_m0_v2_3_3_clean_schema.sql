@@ -888,6 +888,10 @@ CREATE TABLE events (
 CREATE FUNCTION assign_event_stream_version() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $event_stream_version$
 BEGIN
+  IF NEW.stream_version IS NOT NULL THEN
+    RAISE EXCEPTION 'event stream_version is database-assigned'
+      USING ERRCODE = '42501';
+  END IF;
   INSERT INTO event_stream_counters
     (tenant_id, aggregate_type, aggregate_id, last_stream_version)
   VALUES (NEW.tenant_id, NEW.aggregate_type, NEW.aggregate_id, 1)
