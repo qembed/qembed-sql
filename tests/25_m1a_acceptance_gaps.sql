@@ -57,6 +57,9 @@ SELECT tt.try('T-29 runtime cannot mutate allocator counter directly','err',
       AND aggregate_type='invocation'
       AND aggregate_id='29000000-0000-0000-0000-000000000010'$q$);
 RESET ROLE;
+SELECT tt.try('T-20 ToolVersion rows remain immutable after snapshot pinning','err',
+ $q$UPDATE tool_versions SET version='forged-version'
+    WHERE id='11111111-0000-0000-0000-0000000000a1'$q$);
 
 -- T-53: the migration guard must catch both a new table misclassified as
 -- global (nullable tenant_id) and an expected tenant-owned table omitted from
