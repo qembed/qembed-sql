@@ -6,15 +6,17 @@ SELECT set_config('app.tenant_id', :A, false) \gset
 SELECT tt.try('callers','ok',$q$INSERT INTO callers(id,tenant_id,token_hash,caller_kind) VALUES
  ('ca000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'\x11','Authenticated'),
  ('ca000000-0000-0000-0000-000000000002',current_setting('app.tenant_id')::uuid,'\x12','Anonymous')$q$);
--- snapshot
-CREATE TEMP TABLE sj AS SELECT convert_to('{"budget_snapshot":{"d":1},"capabilities":{},"config":{"k":2},"context_config":{},"policy_version":"p1","schema_version":1,"tool_bindings":[]}','UTF8') AS b;
-SELECT tt.try('snapshot insert ok','ok',$q$INSERT INTO snapshots(snapshot_id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
- SELECT '5a000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest(b,'sha256'),'{"k":2}','{}','[]','{"d":1}','{}','p1' FROM sj$q$);
-SELECT tt.try('snapshot bad hash','err',$q$INSERT INTO snapshots(snapshot_id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
- SELECT gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest('x','sha256'),'{"k":2}','{}','[]','{"d":1}','{}','p1' FROM sj$q$);
-SELECT tt.try('snapshot projection mismatch','err',$q$INSERT INTO snapshots(snapshot_id,tenant_id,object_id,object_version_id,schema_version,canonical_json,content_hash,config,capabilities,tool_bindings,budget_snapshot,context_config,policy_version)
- SELECT gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest(b,'sha256'),'{"k":3}','{}','[]','{"d":1}','{}','p1' FROM sj$q$);
-SELECT tt.try('snapshot UPDATE denied','err',$q$UPDATE snapshots SET policy_version='x'$q$);
+-- Snapshot persistence follows the Rust physical contract: exact canonical bytes,
+-- their fixed-width digest, and a derived JSONB query projection. The database
+-- checks projection consistency; cryptographic hash verification belongs to Rust.
+CREATE TEMP TABLE sj AS SELECT convert_to('{"k":2}','UTF8') AS b;
+SELECT tt.try('snapshot insert ok','ok',$q$INSERT INTO snapshots(tenant_id,snapshot_id,object_id,object_version_id,schema_version,canonical_json,content_hash,json_projection)
+ SELECT current_setting('app.tenant_id')::uuid,'5a000000-0000-0000-0000-000000000001','0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest(b,'sha256'),convert_from(b,'UTF8')::jsonb FROM sj$q$);
+SELECT tt.try('snapshot hash verification remains at Rust read boundary','ok',$q$INSERT INTO snapshots(tenant_id,snapshot_id,object_id,object_version_id,schema_version,canonical_json,content_hash,json_projection)
+ SELECT current_setting('app.tenant_id')::uuid,gen_random_uuid(),'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,decode(repeat('00',32),'hex'),convert_from(b,'UTF8')::jsonb FROM sj$q$);
+SELECT tt.try('snapshot projection mismatch rejected','err',$q$INSERT INTO snapshots(tenant_id,snapshot_id,object_id,object_version_id,schema_version,canonical_json,content_hash,json_projection)
+ SELECT current_setting('app.tenant_id')::uuid,gen_random_uuid(),'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest(b,'sha256'),'{"k":3}'::jsonb FROM sj$q$);
+SELECT tt.try('snapshot UPDATE denied','err',$q$UPDATE snapshots SET json_projection='{"tampered":true}'::jsonb$q$);
 SELECT tt.try('snapshot DELETE denied','err',$q$DELETE FROM snapshots$q$);
 -- budgets
 SELECT tt.try('budget row','ok',$q$INSERT INTO object_budgets VALUES (current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001',1000000,1000000,50,100000,5,5,5,10000,60000)$q$);
