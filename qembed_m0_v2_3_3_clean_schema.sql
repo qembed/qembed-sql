@@ -44,7 +44,9 @@ BEGIN
       EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS', r);
     END IF;
   END LOOP;
-END $$;
+END $;
+ALTER ROLE qembed_event_allocator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+GRANT USAGE ON SCHEMA public TO qembed_event_allocator;
 -- qembed_definer: NOLOGIN owner of SECURITY DEFINER functions (A2). Subject to
 -- RLS; sees data only through explicit policies defined in section 20.
 
