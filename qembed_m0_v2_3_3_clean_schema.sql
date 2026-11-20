@@ -1280,10 +1280,10 @@ BEGIN
     FROM pg_class c
     JOIN pg_namespace n ON n.oid=c.relnamespace
     JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
-      AND a.attnum>0 AND NOT a.attisdropped AND a.attnotnull
+      AND a.attnum>0 AND NOT a.attisdropped
    WHERE n.nspname='public' AND c.relkind IN ('r','p')
-     AND c.relname NOT IN ('owner_principals','owner_credentials')
-     AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
+     AND c.relname NOT IN ('owner_principals','owner_credentials','principals','kill_switches')
+     AND (NOT a.attnotnull OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
        SELECT 1 FROM pg_policy p
         WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
           AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
@@ -1291,6 +1291,30 @@ BEGIN
      ));
   IF bad_tables IS NOT NULL THEN
     RAISE EXCEPTION 'tenant RLS classification incomplete: %', bad_tables
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped
+    WHERE n.nspname='public' AND c.relname IN ('principals','kill_switches')
+      AND (a.attnotnull OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
+  ) THEN
+    RAISE EXCEPTION 'restricted-global tenant_id tables lost nullable FORCE-RLS classification'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped
+    WHERE n.nspname='public' AND c.relname IN ('owner_principals','owner_credentials')
+      AND (NOT a.attnotnull OR c.relrowsecurity OR c.relforcerowsecurity)
+  ) THEN
+    RAISE EXCEPTION 'pre-auth owner tables lost their explicit column-grant classification'
       USING ERRCODE = '55000';
   END IF;
 END $rls_audit$;
