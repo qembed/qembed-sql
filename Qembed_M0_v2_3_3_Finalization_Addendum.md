@@ -86,6 +86,7 @@ Not executed for r4: PostgreSQL 15/16 smoke suite после Caller RLS patch, �
 Known schema gaps (не исправлялись в r3, нужны решения):
 - RT-046: у `tenants` нет lifecycle-состояния и legal hold (Offboarding/Erased, T-62) — pre-production deliverable.
 - GC знаний (M2): ни одна роль не имеет `DELETE` на `knowledge_documents`/`knowledge_chunks`; GC с учётом pinned revisions (T-44) требует отдельной привилегированной функции. Зафиксировано в smoke-наборе как `KNOWN GAP`.
+- T-27 caller-level episodic memory RLS was absent in r3; r4 adds the runtime policies and transaction-local Caller binding (§11), but PostgreSQL execution evidence is pending.
 - Инвариант «Verified immutable» в БД допускает единственное изменение — `supersedes_id → NULL` как референциальное действие при удалении исходного candidate (R3-02); ссылка «Verified → candidate» после удаления candidate утрачивается by design.
 - Нет DB-guard на переходы `object_invocations` (terminal immutability / монотонность `fencing_token`): остаётся обязанностью репозитория (CAS) по RT-040; рекомендуется добавить guard до M1b.
 
@@ -136,5 +137,5 @@ Known schema gaps (не исправлялись в r3, нужны решени�
 1. `memories` keeps tenant isolation and additionally scopes episodic rows to the validated `app.caller_id`; semantic rows remain tenant-scoped. Missing Caller context fails closed for episodic reads and writes.
 2. `resolve_delegated_caller` installs the resolved Caller in transaction-local context only after active delegation and lifecycle validation/locking. The context is cleared by PostgreSQL at transaction end and is not accepted from request DTOs.
 3. `memory_embeddings` and `memory_conflicts` policies require visibility of their parent memory rows; a conflict edge is visible only when both endpoints are visible.
-4. Regression suite `tests/24_caller_memory_rls.sql` covers reciprocal Caller isolation, missing context, dependent-table side channels, write denial, and context cleanup. It is wired into `tests/run_smoke.sh`.
+4. Regression suite `tests/24_caller_memory_rls.sql` covers reciprocal Caller isolation, missing context, dependent-table side channels, write denial, and context cleanup. It is wired into `tests/run_smoke.sh` and the PostgreSQL 16 GitHub Actions workflow.
 5. **Validation pending:** r4 has not yet been executed on PostgreSQL 16 + pgvector ≥0.8.0. The r3 smoke result 103/103 is historical and must not be represented as r4 evidence.
