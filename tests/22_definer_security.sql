@@ -66,7 +66,7 @@ SELECT tt.chk('AUDIT-010 no application role is a member of definer',
         AND NOT pg_has_role('qembed_retention','qembed_definer','MEMBER')$q$);
 
 SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PUBLIC-executable',
-  $q$SELECT count(*)=6 AND bool_and(
+  $q$SELECT count(*)=9 AND bool_and(
        pg_get_userbyid(proowner)='qembed_definer'
        AND prosecdef
        AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']

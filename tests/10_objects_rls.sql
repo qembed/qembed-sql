@@ -7,6 +7,7 @@ SELECT set_config('app.tenant_id', :A, false);
 SELECT tt.try('rt create object O1 (Draft)','ok',$q$INSERT INTO objects(object_id,tenant_id,state) VALUES ('0b000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'draft')$q$);
 SELECT tt.chk('knowledge_revisions auto-init', $q$SELECT count(*)=1 FROM knowledge_revisions$q$);
 SELECT tt.try('rt create v1 draft','ok',$q$INSERT INTO object_versions(object_version_id,tenant_id,object_id,version_number,config,chat_model_ref,embedding_model_id) VALUES ('0c000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001',1,'{}','x:y','m3')$q$);
+SELECT tt.try('begin publication validation','ok',$q$UPDATE objects SET state='validating' WHERE object_id='0b000000-0000-0000-0000-000000000001'$q$);
 SELECT tt.try('publish v1 (txn: version->published, pointer, Active)','ok',$q$
   UPDATE object_versions SET status='published', published_at=now() WHERE object_version_id='0c000000-0000-0000-0000-000000000001';
   UPDATE objects SET published_version_id='0c000000-0000-0000-0000-000000000001', state='active' WHERE object_id='0b000000-0000-0000-0000-000000000001'$q$);

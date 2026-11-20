@@ -1,12 +1,12 @@
 # Qembed Object Runtime — M0 v2.3.3
-## Finalization Addendum / Normative Consolidation (r3)
+## Finalization Addendum / Normative Consolidation (r4)
 
-**Статус:** архитектурная база заморожена для начала M1a. SQL (r3) — clean-install candidate, не production-certified до прохождения T-01…T-64 на матрице PostgreSQL 15/16 + pgvector ≥0.8.0. Редакция r3 исправляет шесть дефектов SQL, найденных поведенческим прогоном (§10); архитектура не менялась.
+**Статус:** архитектурная база заморожена для начала M1a. SQL (r4) — clean-install candidate, не production-certified до прохождения T-01…T-64 на матрице PostgreSQL 15/16 + pgvector ≥0.8.0. Редакция r3 исправила шесть дефектов SQL (§10). Редакция r4 добавляет DB-level Caller isolation для T-27 (§11); прикладной retrieval path остаётся частью M2.
 
 ### 1. Приоритет документов
-1. Настоящий addendum v2.3.3 — нормативные уточнения и решения RT-039…RT-047.
+1. Настоящий addendum v2.3.3 — нормативные уточнения и решения RT-039…RT-049.
 2. `qembed_m0_v2_3_3_clean_schema.sql` — clean install only; не upgrade migration.
-3. `ADR_RT-039_to_RT-047.md` — rationale и release gates.
+3. `ADR_RT-039_to_RT-047.md` и `ADR_RT-049_Caller_Memory_RLS.md` — rationale и release gates.
 4. `acceptance_T-01_to_T-64.md` — обязательные acceptance assertions.
 5. Исходная Specification M0 v2.2 — сохраняет неизменённые доменные/API/roadmap разделы. При конфликте применять addendum.
 6. v2.3.2 errata и correction pack — исходные предложения/контекст, не более приоритетные, чем этот addendum.
@@ -79,13 +79,14 @@ SSRF: resolve complete A+AAAA set; reject mixed/forbidden answers; pinned connec
 9. No unresolved critical/high security findings; all waivers carry owner, rationale, expiry and ADR.
 
 ### 9. Known limits of this package
-Execution evidence (r3): clean schema r3 applied **without** the smoke flag on PostgreSQL 16 + pgvector 0.8.0 (собран из тега v0.8.0). Поведенческий smoke-набор (`tests/`, 103 проверки под ролями `qembed_runtime` / `qembed_retention` / `qembed_dispatcher` / `qembed_admin` через `SET ROLE`, плюс реальный логин для проверки `SET ROLE qembed_definer`) проходит 103/103; тот же набор на SQL r1 даёт 12 падений (6 дефектов R3-01…R3-06). Это smoke evidence, не сертификация совместимости и не замена T-01…T-64 в CI.
+Execution evidence (r3 baseline): clean schema r3 applied **without** the smoke flag on PostgreSQL 16 + pgvector 0.8.0 (собран из тега v0.8.0). Поведенческий smoke-набор (`tests/`, 103 проверки под ролями `qembed_runtime` / `qembed_retention` / `qembed_dispatcher` / `qembed_admin` через `SET ROLE`, плюс реальный логин для проверки `SET ROLE qembed_definer`) проходит 103/103; тот же набор на SQL r1 даёт 12 падений (6 дефектов R3-01…R3-06). Это smoke evidence, не сертификация совместимости и не замена T-01…T-64 в CI.
 
-Not executed: PostgreSQL 15; pgvector gate на версии <0.8.0 без флага (в r3 не повторялся); остальные тесты T-01…T-64 (в т.ч. реальная конкурентность/fencing, T-05/T-16 параллельные резервы, T-44 GC), Rust JCS corpus, SSRF corpus, failure-injection matrix, upgrade migration. Это явные release gates.
+Not executed for r4: PostgreSQL 15/16 smoke suite после Caller RLS patch, остальные тесты T-01…T-64 (в т.ч. реальная конкурентность/fencing, T-05/T-16 параллельные резервы, T-44 GC), Rust JCS corpus, SSRF corpus, failure-injection matrix, upgrade migration. r3 evidence 103/103 не подтверждает r4. Это явные release gates.
 
 Known schema gaps (не исправлялись в r3, нужны решения):
 - RT-046: у `tenants` нет lifecycle-состояния и legal hold (Offboarding/Erased, T-62) — pre-production deliverable.
 - GC знаний (M2): ни одна роль не имеет `DELETE` на `knowledge_documents`/`knowledge_chunks`; GC с учётом pinned revisions (T-44) требует отдельной привилегированной функции. Зафиксировано в smoke-наборе как `KNOWN GAP`.
+- T-27 caller-level episodic memory RLS was absent in r3; r4 adds the runtime policies and transaction-local Caller binding (§11), but PostgreSQL execution evidence is pending.
 - Инвариант «Verified immutable» в БД допускает единственное изменение — `supersedes_id → NULL` как референциальное действие при удалении исходного candidate (R3-02); ссылка «Verified → candidate» после удаления candidate утрачивается by design.
 - Нет DB-guard на переходы `object_invocations` (terminal immutability / монотонность `fencing_token`): остаётся обязанностью репозитория (CAS) по RT-040; рекомендуется добавить guard до M1b.
 
@@ -130,3 +131,11 @@ Known schema gaps (не исправлялись в r3, нужны решени�
 7. `sweep_expired_reservations` may expire only attempts in `NotStarted`, `ConfirmedNotAccepted`, or `CancelledBeforeSend`. It must join an attempt row; a missing row fails closed and is not swept. `MayHaveBeenSent`, `ResponseReceived`, and `OutcomeUnknown` remain reserved regardless of expiry.
 8. Provider idempotency capability is opt-in and does not by itself prove a request was not accepted. This stage does not automatically retry an ambiguous call; retry policy requires a separately verified route/account identity and provider-specific deduplication guarantee.
 9. The attempt row is tenant-scoped, immutable in identity, and guarded by a monotonic state transition constraint. Token counters and reservation lifecycle remain atomic in their existing store transactions.
+
+
+### 11. Changes in r4 — T-27 Caller-level memory RLS
+1. `memories` keeps tenant isolation and additionally scopes episodic rows to the validated `app.caller_id`; semantic rows remain tenant-scoped. Missing Caller context fails closed for episodic reads and writes.
+2. `resolve_delegated_caller` installs the resolved Caller in transaction-local context only after active delegation and lifecycle validation/locking. The context is cleared by PostgreSQL at transaction end and is not accepted from request DTOs.
+3. `memory_embeddings` and `memory_conflicts` policies require visibility of their parent memory rows; a conflict edge is visible only when both endpoints are visible.
+4. Regression suite `tests/24_caller_memory_rls.sql` covers reciprocal Caller isolation, missing context, dependent-table side channels, write denial, and context cleanup. It is wired into `tests/run_smoke.sh` and the PostgreSQL 16 GitHub Actions workflow.
+5. **Validation pending:** r4 has not yet been executed on PostgreSQL 16 + pgvector ≥0.8.0. The r3 smoke result 103/103 is historical and must not be represented as r4 evidence.

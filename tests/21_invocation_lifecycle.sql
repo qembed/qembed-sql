@@ -92,8 +92,10 @@ SELECT tt.try('AUDIT-009 ContextLoading -> Processing', 'ok', $q$
   UPDATE object_invocations SET status='Processing', version=version+1
    WHERE id='1a000000-0000-0000-0000-000000000001'
 $q$);
-SELECT tt.try('AUDIT-009 Processing cannot skip directly to Verifying', 'err', $q$
-  UPDATE object_invocations SET status='Verifying', version=version+1
+SELECT tt.try('AUDIT-009 Processing cannot skip directly to Completed', 'err', $q$
+  UPDATE object_invocations
+     SET status='Completed', version=version+1, finished_at=now(),
+         lease_owner=NULL, lease_until=NULL
    WHERE id='1a000000-0000-0000-0000-000000000001'
 $q$);
 SELECT tt.try('AUDIT-009 Processing -> ExecutingTool', 'ok', $q$

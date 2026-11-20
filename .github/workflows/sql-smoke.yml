@@ -1,0 +1,50 @@
+name: SQL PostgreSQL smoke
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches: [master]
+  push:
+    branches: [master, fix/t-27-caller-memory-rls]
+
+jobs:
+  postgres-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+      - name: Start PostgreSQL 16 with pgvector
+        run: |
+          docker run --detach --name qembed-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_PASSWORD=postgres \
+            pgvector/pgvector:0.8.7-pg16-bookworm
+          for attempt in $(seq 1 60); do
+            if docker exec qembed-postgres pg_isready -U postgres -d postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs qembed-postgres
+          exit 1
+      - name: Create schema owner
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: |
+          psql -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE qembed_migrator LOGIN SUPERUSER PASSWORD 'migrator'"
+      - name: Run PostgreSQL smoke suite
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: qembed_migrator
+          PGPASSWORD: migrator
+          DB: qembed_smoke
+        run: bash tests/run_smoke.sh

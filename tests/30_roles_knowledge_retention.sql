@@ -17,7 +17,7 @@ SELECT tt.try('list_expired_invocation_leases','ok',$q$SELECT * FROM list_expire
 SELECT tt.try('list_pending_reconciliations','ok',$q$SELECT * FROM list_pending_reconciliations(10)$q$);
 SELECT tt.try('T-54 runtime cannot call retention_purge','err',$q$SELECT retention_purge('outbox_messages',now(),'x')$q$);
 -- sweeper
-SELECT tt.chk('sweeper expires 1', $q$SELECT sweep_expired_reservations(10)=1$q$);
+SELECT tt.chk('sweeper is idempotent after RUST-041d expiry coverage', $q$SELECT sweep_expired_reservations(10)=0$q$);
 SELECT tt.chk('T-40 sweeper idempotent', $q$SELECT sweep_expired_reservations(10)=0$q$);
 SELECT tt.chk('usage_counters reserved released', $q$SELECT reserved_tokens=0 FROM usage_counters$q$);
 SELECT tt.chk('R3-04 caller_usage_counters reserved released', $q$SELECT reserved_tokens=0 FROM caller_usage_counters$q$);
@@ -64,7 +64,7 @@ RESET ROLE;
 SET ROLE qembed_retention;
 SELECT tt.try('AUDIT-005 retention purges delivered outbox rows','ok',$q$SELECT retention_purge('outbox_messages',now(),'ttl')$q$);
 RESET ROLE;
-SELECT tt.chk('AUDIT-005 retention preserves pending outbox rows', $q$SELECT count(*)=1 AND bool_and(delivered_at IS NULL) FROM outbox_messages$q$);
+SELECT tt.chk('AUDIT-005 retention preserves pending outbox rows', $q$SELECT count(*)=1 AND bool_and(delivered_at IS NULL) FROM outbox_messages WHERE tenant_id=current_setting('app.tenant_id')::uuid$q$);
 -- RLS audit & role attrs
 SELECT tt.chk('T-54 role attrs', $q$SELECT count(*)=0 FROM pg_roles WHERE rolname LIKE 'qembed_%' AND rolname<>'qembed_migrator' AND (rolsuper OR rolbypassrls OR rolcanlogin)$q$);
 SELECT tt.chk('T-57 definer fns owned by definer, no PUBLIC exec', $q$SELECT bool_and(pg_get_userbyid(proowner)='qembed_definer' AND NOT has_function_privilege('public',p.oid,'EXECUTE') AND prosecdef AND proconfig IS NOT NULL) FROM pg_proc p WHERE pronamespace='public'::regnamespace AND prosecdef$q$);

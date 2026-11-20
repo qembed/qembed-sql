@@ -41,6 +41,26 @@ SELECT tt.try('RUST-041d unknown outcome may reconcile to durable response', 'ok
    WHERE tenant_id=current_setting('app.tenant_id')::uuid
      AND invocation_id='1a000000-0000-0000-0000-000000000001'
 $q$);
+SELECT tt.try('RUST-041d settle response and release its reservation atomically', 'ok', $q$
+  UPDATE budget_reservations
+     SET status='Settled', actual_tokens=19, actual_cost_micros=0
+   WHERE tenant_id=current_setting('app.tenant_id')::uuid
+     AND invocation_id='1a000000-0000-0000-0000-000000000001'
+     AND status='Reserved';
+  UPDATE usage_counters
+     SET reserved_tokens=reserved_tokens-500,
+         reserved_cost_micros=reserved_cost_micros-500,
+         consumed_tokens=consumed_tokens+19
+   WHERE tenant_id=current_setting('app.tenant_id')::uuid
+     AND object_id='0b000000-0000-0000-0000-000000000001'
+     AND usage_date=current_date AND pool='authenticated';
+  UPDATE caller_usage_counters
+     SET reserved_tokens=reserved_tokens-500, consumed_tokens=consumed_tokens+19
+   WHERE tenant_id=current_setting('app.tenant_id')::uuid
+     AND object_id='0b000000-0000-0000-0000-000000000001'
+     AND caller_id='ca000000-0000-0000-0000-000000000001'
+     AND usage_date=current_date
+$q$);
 SELECT tt.try('RUST-041d persisted response usage is immutable', 'err', $q$
   UPDATE provider_call_attempts SET input_tokens=13
    WHERE tenant_id=current_setting('app.tenant_id')::uuid
@@ -59,7 +79,16 @@ SELECT tt.try('RUST-041d seed a second invocation for pre-send cancellation', 'o
      '5a000000-0000-0000-0000-000000000001',
      0,'authenticated','Received',gen_random_uuid())
 $q$);
-SELECT tt.try('RUST-041d create its expired reservation', 'ok', $q$
+SELECT tt.try('RUST-041d reserve usage for second invocation', 'ok', $q$
+  UPDATE usage_counters SET reserved_tokens=reserved_tokens+25
+   WHERE tenant_id=current_setting('app.tenant_id')::uuid
+     AND object_id='0b000000-0000-0000-0000-000000000001'
+     AND usage_date=current_date AND pool='authenticated';
+  UPDATE caller_usage_counters SET reserved_tokens=reserved_tokens+25
+   WHERE tenant_id=current_setting('app.tenant_id')::uuid
+     AND object_id='0b000000-0000-0000-0000-000000000001'
+     AND caller_id='ca000000-0000-0000-0000-000000000001'
+     AND usage_date=current_date;
   INSERT INTO budget_reservations
     (id,tenant_id,object_id,invocation_id,pool,usage_date,reserved_tokens,
      reserved_cost_micros,status,expires_at)
