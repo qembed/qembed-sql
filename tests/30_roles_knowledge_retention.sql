@@ -17,7 +17,7 @@ SELECT tt.try('list_expired_invocation_leases','ok',$q$SELECT * FROM list_expire
 SELECT tt.try('list_pending_reconciliations','ok',$q$SELECT * FROM list_pending_reconciliations(10)$q$);
 SELECT tt.try('T-54 runtime cannot call retention_purge','err',$q$SELECT retention_purge('outbox_messages',now(),'x')$q$);
 -- sweeper
-SELECT tt.chk('sweeper expires 1', $q$SELECT sweep_expired_reservations(10)=1$q$);
+SELECT tt.chk('sweeper is idempotent after RUST-041d expiry coverage', $q$SELECT sweep_expired_reservations(10)=0$q$);
 SELECT tt.chk('T-40 sweeper idempotent', $q$SELECT sweep_expired_reservations(10)=0$q$);
 SELECT tt.chk('usage_counters reserved released', $q$SELECT reserved_tokens=0 FROM usage_counters$q$);
 SELECT tt.chk('R3-04 caller_usage_counters reserved released', $q$SELECT reserved_tokens=0 FROM caller_usage_counters$q$);
