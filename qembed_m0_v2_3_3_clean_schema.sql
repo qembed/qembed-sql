@@ -520,7 +520,16 @@ BEGIN
     END IF;
   ELSIF OLD.lease_owner IS NOT NULL
         AND OLD.lease_until > now()
-        AND NEW.lease_owner IS DISTINCT FROM OLD.lease_owner THEN
+        AND NEW.lease_owner IS DISTINCT FROM OLD.lease_owner
+        AND NOT (
+          status_changed
+          AND NEW.status IN ('Completed','CompletedDegraded','Failed','Cancelled')
+          AND NEW.lease_owner IS NULL
+          AND NEW.lease_until IS NULL
+        ) THEN
+    -- The current lease holder may release its lease as part of a terminal
+    -- transition. This is not a lease steal: the status transition is validated
+    -- above and the fencing token must remain unchanged.
     RAISE EXCEPTION 'an active invocation lease cannot be stolen'
       USING ERRCODE = '40001';
   ELSIF OLD.lease_owner IS NOT NULL
