@@ -69,6 +69,9 @@ SELECT tt.try('T-27 Caller A cannot create conflict edge to Caller B','err',
  VALUES ('c2750000-0000-0000-0000-000000000003','c2700000-0000-0000-0000-000000000001','c2730000-0000-0000-0000-000000000001','c2740000-0000-0000-0000-000000000001','c2740000-0000-0000-0000-000000000003','open')$q$);
 SELECT tt.try('T-27 Caller A update of Caller B memory affects no row','ok',
  $q$UPDATE memories SET claim='tampered' WHERE id='c2740000-0000-0000-0000-000000000003'$q$);
+SELECT tt.try('T-27 Caller A cannot reassign own memory to Caller B','err',
+ $q$UPDATE memories SET caller_id='c2720000-0000-0000-0000-000000000002'
+    WHERE id='c2740000-0000-0000-0000-000000000001'$q$);
 SELECT tt.try('T-27 Caller A delete of Caller B memory affects no row','ok',
  $q$DELETE FROM memories WHERE id='c2740000-0000-0000-0000-000000000003'$q$);
 
