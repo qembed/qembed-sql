@@ -2,8 +2,9 @@
 
 ## Files
 - `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r4 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. (r4 adds T-27 Caller-level memory RLS; r4 validation pending).
-- `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r3); §10 — изменения r3.
-- `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-048 (including r3 corrections).\n- `ADR_RT-049_Caller_Memory_RLS.md` — Caller-level episodic memory isolation decision (r4).
+- `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r4); §10 — изменения r3, §11 — T-27.
+- `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-048 (including r3 corrections).
+- `ADR_RT-049_Caller_Memory_RLS.md` — Caller-level episodic memory isolation decision (r4).
 - `ADR_RUST-044_Identical_Content_Version_Deduplication.md` — approved application contract for identical canonical content; no DDL change.
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
 - `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40, включая 17_tenant_rls.sql и 24_caller_memory_rls.sql; `05_rust_physical_contract.sql` — контракт физических имён/ключей Rust). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`.
@@ -18,14 +19,16 @@
 6. R3-06 — `qembed_admin` не мог создать объект (нет доступа к `knowledge_revisions`).
 
 ## Validation status
-- r3 baseline: PostgreSQL 16 + pgvector 0.8.0, smoke-набор 103/103 (r1 на том же наборе: 12 падений).\n- r4: caller-level RLS и regression tests добавлены; PostgreSQL execution ещё не выполнен. r3 evidence не подтверждает r4.
+- r3 baseline: PostgreSQL 16 + pgvector 0.8.0, smoke-набор 103/103 (r1 на том же наборе: 12 падений).
+- r4: caller-level RLS и regression tests добавлены; PostgreSQL execution ещё не выполнен. r3 evidence не подтверждает r4.
 - NOT executed: PostgreSQL 15, большинство T-01…T-64, конкурентность/fencing, Rust JCS, SSRF, failure-injection, upgrade. Заявления о production-готовности нет.
 - **B-01…B-09:** список замечаний и отчёт r2 в присланный архив не входили; r3 не утверждает закрытие B-01…B-09 и не сопоставляет с ними R3-01…R3-06. Пришлите список — сверю.
 
 ## Open items (r4 candidate)
 - RT-046 tenant lifecycle / legal hold (T-62).
 - GC знаний: нет `DELETE`-пути (M2, T-44).
-- T-27 SQL implementation is in r4; its PostgreSQL smoke execution is pending.\n- Concurrent multi-session tests for Invocation fencing remain outstanding.
+- T-27 SQL implementation is in r4; its PostgreSQL smoke execution is pending.
+- Concurrent multi-session tests for Invocation fencing remain outstanding.
 
 ## Start coding
 Архитектура заморожена для M1a (addendum §7–§8, RT-047). SQL — candidate до прохождения T-01…T-64 на PG 15/16 × pgvector ≥0.8.0. Внешние write-tools не включать до T-07, T-22, T-38, T-46, T-47, T-52, T-59, T-64.
