@@ -79,6 +79,8 @@ SELECT tt.chk('AUDIT-010 only isolated allocator can mutate stream counters',
   $q$SELECT has_table_privilege('qembed_event_allocator','public.event_stream_counters','UPDATE')
        AND NOT has_table_privilege('qembed_runtime','public.event_stream_counters','UPDATE')
        AND NOT has_table_privilege('qembed_dispatcher','public.event_stream_counters','UPDATE')
+       AND NOT has_table_privilege('qembed_event_allocator','public.objects','SELECT')
+       AND NOT has_table_privilege('qembed_event_allocator','public.events','INSERT')
        AND NOT pg_has_role('qembed_runtime','qembed_event_allocator','MEMBER')
        AND NOT pg_has_role('qembed_dispatcher','qembed_event_allocator','MEMBER')$q$);
 
