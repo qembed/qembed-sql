@@ -39,6 +39,7 @@ SELECT tt.chk('AUDIT-001/004/005 column contract (type, NOT NULL, default) of Ru
    ('events','event_id','uuid',true,NULL),
    ('events','aggregate_type','text',true,NULL),
    ('events','aggregate_id','uuid',true,NULL),
+   ('events','stream_version','bigint',true,NULL),
    ('events','event_type','text',true,NULL),
    ('events','payload','jsonb',true,NULL),
    ('events','occurred_at','timestamp with time zone',true,'now()'),
