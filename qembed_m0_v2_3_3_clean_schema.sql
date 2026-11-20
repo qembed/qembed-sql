@@ -1145,35 +1145,6 @@ BEGIN
   END LOOP;
 END $$;
 
--- Reusable catalog assertion: migrations call this before becoming usable,
--- and regression tests deliberately create an unclassified tenant table to
--- prove the guard aborts rather than silently accepting an incomplete policy set.
-CREATE FUNCTION assert_tenant_rls_classification() RETURNS void
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $rls_audit$
-DECLARE bad_tables TEXT;
-BEGIN
-  SELECT string_agg(format('%I', c.relname), ', ' ORDER BY c.relname)
-    INTO bad_tables
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid=c.relnamespace
-    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
-      AND a.attnum>0 AND NOT a.attisdropped AND a.attnotnull
-   WHERE n.nspname='public' AND c.relkind IN ('r','p')
-     AND c.relname NOT IN ('owner_principals','owner_credentials')
-     AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
-       SELECT 1 FROM pg_policy p
-        WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
-          AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
-          AND p.polcmd='*'
-     ));
-  IF bad_tables IS NOT NULL THEN
-    RAISE EXCEPTION 'tenant RLS classification incomplete: %', bad_tables
-      USING ERRCODE = '55000';
-  END IF;
-END $rls_audit$;
-REVOKE ALL ON FUNCTION assert_tenant_rls_classification() FROM PUBLIC;
-SELECT assert_tenant_rls_classification();
-
 -- These tables are excluded from the generic tenant-only policy loop because
 -- their runtime policy also depends on the parent memory's Caller visibility.
 ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
@@ -1292,6 +1263,36 @@ CREATE POLICY admin_objects ON objects TO qembed_admin USING (true) WITH CHECK (
 -- provisioning failed with 42501 on knowledge_revisions.
 CREATE POLICY admin_knowledge_revisions ON knowledge_revisions FOR SELECT TO qembed_admin USING (true);
 CREATE POLICY admin_knowledge_revisions_ins ON knowledge_revisions FOR INSERT TO qembed_admin WITH CHECK (current_revision = 0);
+
+-- Reusable catalog assertion: migrations call this before becoming usable,
+-- and regression tests deliberately create an unclassified tenant table to
+-- prove the guard aborts rather than silently accepting an incomplete policy set.
+CREATE FUNCTION assert_tenant_rls_classification() RETURNS void
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $rls_audit$
+DECLARE bad_tables TEXT;
+BEGIN
+  SELECT string_agg(format('%I', c.relname), ', ' ORDER BY c.relname)
+    INTO bad_tables
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped AND a.attnotnull
+   WHERE n.nspname='public' AND c.relkind IN ('r','p')
+     AND c.relname NOT IN ('owner_principals','owner_credentials')
+     AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
+       SELECT 1 FROM pg_policy p
+        WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
+          AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
+          AND p.polcmd='*'
+     ));
+  IF bad_tables IS NOT NULL THEN
+    RAISE EXCEPTION 'tenant RLS classification incomplete: %', bad_tables
+      USING ERRCODE = '55000';
+  END IF;
+END $rls_audit$;
+REVOKE ALL ON FUNCTION assert_tenant_rls_classification() FROM PUBLIC;
+SELECT assert_tenant_rls_classification();
+
 
 -- -----------------------------------------------------------------------------
 -- 16. SECURITY DEFINER functions (owner qembed_definer; fixed search_path)
