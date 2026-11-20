@@ -1083,8 +1083,8 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'objects','object_versions','callers','snapshots','object_invocations',
     'invocation_idempotency','interaction_messages','knowledge_revisions','knowledge_revision_log',
-    'knowledge_documents','knowledge_chunks','knowledge_chunk_embeddings','memories',
-    'memory_conflicts','memory_embeddings','object_tools','policy_decisions',
+    'knowledge_documents','knowledge_chunks','knowledge_chunk_embeddings',
+    'object_tools','policy_decisions',
     'tool_command_payloads','tool_executions','events','outbox_messages','object_budgets',
     'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters','budget_event_dedup',
     'object_goals','object_tasks','deletion_jobs','deletion_ledger',
@@ -1096,7 +1096,74 @@ BEGIN
       USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
       WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)$p$, t);
   END LOOP;
-END $$;
+END $;
+
+-- T-27: semantic memory remains tenant-scoped; episodic memory is Caller-scoped.
+-- Missing app.caller_id fails closed for episodic rows.
+CREATE POLICY tenant_isolation ON memories TO qembed_runtime
+  USING (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+    AND (memory_kind = 'semantic'
+         OR caller_id = NULLIF(current_setting('app.caller_id', true), '')::uuid)
+  )
+  WITH CHECK (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+    AND (memory_kind = 'semantic'
+         OR caller_id = NULLIF(current_setting('app.caller_id', true), '')::uuid)
+  );
+
+-- Child tables inherit visibility from their parent memories, closing side channels.
+CREATE POLICY tenant_isolation ON memory_embeddings TO qembed_runtime
+  USING (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+    AND EXISTS (
+      SELECT 1 FROM memories m
+       WHERE m.tenant_id = memory_embeddings.tenant_id
+         AND m.object_id = memory_embeddings.object_id
+         AND m.id = memory_embeddings.memory_id
+    )
+  )
+  WITH CHECK (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+    AND EXISTS (
+      SELECT 1 FROM memories m
+       WHERE m.tenant_id = memory_embeddings.tenant_id
+         AND m.object_id = memory_embeddings.object_id
+         AND m.id = memory_embeddings.memory_id
+    )
+  );
+
+CREATE POLICY tenant_isolation ON memory_conflicts TO qembed_runtime
+  USING (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+    AND EXISTS (
+      SELECT 1 FROM memories m
+       WHERE m.tenant_id = memory_conflicts.tenant_id
+         AND m.object_id = memory_conflicts.object_id
+         AND m.id = memory_conflicts.memory_id
+    )
+    AND EXISTS (
+      SELECT 1 FROM memories m
+       WHERE m.tenant_id = memory_conflicts.tenant_id
+         AND m.object_id = memory_conflicts.object_id
+         AND m.id = memory_conflicts.conflicting_memory_id
+    )
+  )
+  WITH CHECK (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+    AND EXISTS (
+      SELECT 1 FROM memories m
+       WHERE m.tenant_id = memory_conflicts.tenant_id
+         AND m.object_id = memory_conflicts.object_id
+         AND m.id = memory_conflicts.memory_id
+    )
+    AND EXISTS (
+      SELECT 1 FROM memories m
+       WHERE m.tenant_id = memory_conflicts.tenant_id
+         AND m.object_id = memory_conflicts.object_id
+         AND m.id = memory_conflicts.conflicting_memory_id
+    )
+  );
 
 -- restricted-global tables with explicit policies
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;      ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
@@ -1243,6 +1310,9 @@ BEGIN
     RAISE EXCEPTION 'no active delegation for this Principal and Caller'
       USING ERRCODE = '42501';
   END IF;
+
+  -- Bind caller-scoped RLS to the validated delegation for this transaction only.
+  PERFORM set_config('app.caller_id', p_caller_id::text, true);
 END
 $resolve_delegated_caller$;
 
