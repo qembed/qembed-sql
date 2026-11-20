@@ -18,6 +18,8 @@ jobs:
             image: pgvector/pgvector:0.8.7-pg15-bookworm
           - postgres: "16"
             image: pgvector/pgvector:0.8.7-pg16-bookworm
+          - postgres: "19"
+            image: pgvector/pgvector:0.8.7-pg19-bookworm
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
