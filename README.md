@@ -6,7 +6,7 @@
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-047 + новый RT-048 (r3 corrections).
 - `ADR_RUST-044_Identical_Content_Version_Deduplication.md` — approved application contract for identical canonical content; no DDL change.
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
-- `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40, включая 17_tenant_rls.sql; `05_rust_physical_contract.sql` — контракт физических имён/ключей Rust). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`.
+- `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40, включая 17_tenant_rls.sql и 24_caller_memory_rls.sql; `05_rust_physical_contract.sql` — контракт физических имён/ключей Rust). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`.
 - `Qembed_Object_Runtime_M0_v2_3_3_FINAL_TZ.pdf`, `Qembed_M0_v2_3_3_Diagrams.pdf` — **не пересобирались, содержимое r1**. Нормативны `.md` (addendum r3 имеет приоритет по §1); PDF с addendum r1 устарел в части §9–§10.
 
 ## Что исправлено в r3 (SQL)
@@ -126,6 +126,13 @@ Rust-репозиторий — неизменяемый источник кон
 - ToolExecution remains outside this audit: the Rust repository currently has no ToolExecution domain/repository contract. Its existing Unknown/reconciliation SQL guard is unchanged.
 - Rust source, migrations, and roadmap are not modified.
 
+
+### T-27: Caller-level episodic memory isolation
+- `resolve_delegated_caller(p_caller_id)` installs `app.caller_id` transaction-locally only after the active tenant/Principal/Caller delegation and lifecycle rows have been validated and locked.
+- `memories` RLS keeps semantic memory tenant-scoped and restricts episodic memory to the resolved Caller. Missing Caller context exposes no episodic rows and rejects episodic writes.
+- `memory_embeddings` and `memory_conflicts` inherit visibility from their parent memory rows, preventing child-table and conflict-edge side channels.
+- The caller context must be established by `resolve_delegated_caller` in the same transaction as memory access. It is not taken from a request DTO. As with the existing tenant/principal GUC contract, this assumes application-internal SQL execution under `qembed_runtime`; RLS is not a defense against arbitrary SQL executed with that role.
+- Regression coverage: `tests/24_caller_memory_rls.sql`, included in `tests/run_smoke.sh`.
 
 ### AUDIT-010: SECURITY DEFINER hardening
 - Revoke `CREATE` on schema `public` from `PUBLIC` and all application roles. Pin every SECURITY DEFINER function search path to `pg_catalog, public, pg_temp`, placing the temporary schema last so caller-created temporary relations cannot shadow trusted objects.
