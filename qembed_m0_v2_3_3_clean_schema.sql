@@ -903,7 +903,9 @@ END $event_stream_version$;
 CREATE TRIGGER events_assign_stream_version
   BEFORE INSERT ON events
   FOR EACH ROW EXECUTE FUNCTION assign_event_stream_version();
+GRANT CREATE ON SCHEMA public TO qembed_event_allocator;
 ALTER FUNCTION assign_event_stream_version() OWNER TO qembed_event_allocator;
+REVOKE CREATE ON SCHEMA public FROM qembed_event_allocator;
 REVOKE ALL ON FUNCTION assign_event_stream_version() FROM PUBLIC;
 
 CREATE INDEX events_aggregate_order_idx
