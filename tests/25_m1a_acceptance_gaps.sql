@@ -70,6 +70,10 @@ CREATE TABLE public.tt_unclassified_tenant_probe(tenant_id uuid);
 SELECT tt.try('T-53 RLS migration guard rejects nullable tenant table','err',
  $q$SELECT assert_tenant_rls_classification()$q$);
 DROP TABLE public.tt_unclassified_tenant_probe;
+CREATE TABLE public.tt_unclassified_global_probe(id uuid);
+SELECT tt.try('T-53 RLS migration guard rejects unclassified public table without tenant_id','err',
+ $q$SELECT assert_tenant_rls_classification()$q$);
+DROP TABLE public.tt_unclassified_global_probe;
 
 ALTER TABLE event_stream_counters RENAME TO tt_missing_event_stream_counters;
 SELECT tt.try('T-53 RLS migration guard rejects omitted expected tenant table','err',
