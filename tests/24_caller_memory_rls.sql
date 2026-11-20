@@ -71,8 +71,12 @@ SELECT tt.try('T-27 Caller A update of Caller B memory affects no row','ok',
  $q$UPDATE memories SET claim='tampered' WHERE id='c2740000-0000-0000-0000-000000000003'$q$);
 SELECT tt.try('T-27 Caller A delete of Caller B memory affects no row','ok',
  $q$DELETE FROM memories WHERE id='c2740000-0000-0000-0000-000000000003'$q$);
+
+-- Verify unchanged content as the schema owner; Caller A itself must not see this row.
+RESET ROLE;
 SELECT tt.chk('T-27 Caller B memory remains unchanged',
  $q$SELECT claim='caller B secret' FROM memories WHERE id='c2740000-0000-0000-0000-000000000003'$q$);
+SET ROLE qembed_runtime;
 
 -- The same Principal may resolve Caller B, but its context is isolated from A.
 SELECT * FROM resolve_delegated_caller('c2720000-0000-0000-0000-000000000002');
