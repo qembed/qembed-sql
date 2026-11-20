@@ -17,7 +17,7 @@ jobs:
           - postgres: "15"
             image: pgvector/pgvector:0.8.7-pg15-bookworm
           - postgres: "16"
-            image: ${{ matrix.image }}
+            image: pgvector/pgvector:0.8.7-pg16-bookworm
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
