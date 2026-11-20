@@ -1495,7 +1495,7 @@ GRANT SELECT (tenant_id, caller_id, principal_kind, disabled_at) ON owner_princi
 GRANT SELECT (tenant_id, caller_id, token_hash, revoked_at) ON owner_credentials TO qembed_runtime;
 GRANT SELECT ON principal_caller_delegations TO qembed_runtime;
 GRANT SELECT, INSERT, UPDATE ON
-  objects, object_versions, callers, object_invocations, invocation_idempotency,
+  objects, object_versions, callers, object_invocations, invocation_idempotency, event_stream_counters,
   interaction_messages, knowledge_revisions, knowledge_documents, knowledge_chunks,
   knowledge_chunk_embeddings, memories, memory_conflicts, memory_embeddings, object_tools,
   tool_command_payloads, tool_executions, object_budgets, budget_reservations,
