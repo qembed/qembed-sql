@@ -41,7 +41,7 @@ SELECT tt.chk('AUDIT-006 all tenant-owned tables have ENABLE+FORCE RLS and runti
        WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
          AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
          AND p.polcmd='*'
-     )))$q$);
+     ))$q$);
 
 SELECT tt.chk('AUDIT-006 pre-auth owner tables remain outside tenant RLS',
  $q$SELECT bool_and(NOT c.relrowsecurity AND NOT c.relforcerowsecurity)
