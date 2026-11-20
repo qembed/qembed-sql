@@ -91,6 +91,9 @@ CREATE TABLE tool_versions (
   CHECK (risk_level IN ('R0','R1') OR idempotent),
   UNIQUE (tool_id, version), UNIQUE (tool_id, id)
 );
+CREATE TRIGGER tool_versions_immutable
+  BEFORE UPDATE OR DELETE ON tool_versions
+  FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
 
 -- -----------------------------------------------------------------------------
 -- 3. Tenants, principals
