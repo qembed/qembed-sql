@@ -1096,7 +1096,7 @@ BEGIN
       USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
       WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)$p$, t);
   END LOOP;
-END $;
+END $$;
 
 -- These tables are excluded from the generic tenant-only policy loop because
 -- their runtime policy also depends on the parent memory's Caller visibility.
