@@ -38,7 +38,7 @@ DO $$
 DECLARE r TEXT;
 BEGIN
   FOREACH r IN ARRAY ARRAY['qembed_runtime','qembed_dispatcher','qembed_admin',
-                           'qembed_retention','qembed_definer']
+                           'qembed_retention','qembed_definer','qembed_event_allocator']
   LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
       EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS', r);
@@ -51,7 +51,7 @@ END $$;
 -- SECURITY DEFINER functions use this schema in their fixed search_path.
 -- Application and PUBLIC roles must never be able to shadow objects there.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer;
+REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer, qembed_event_allocator;
 
 -- -----------------------------------------------------------------------------
 -- 1. Guards
@@ -886,7 +886,7 @@ CREATE TABLE events (
 -- same stream serialize on its counter row; independent streams do not share a
 -- lock or counter. The caller cannot choose or reuse a version.
 CREATE FUNCTION assign_event_stream_version() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $event_stream_version$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $event_stream_version$
 BEGIN
   IF NEW.stream_version IS NOT NULL THEN
     RAISE EXCEPTION 'event stream_version is database-assigned'
@@ -903,6 +903,8 @@ END $event_stream_version$;
 CREATE TRIGGER events_assign_stream_version
   BEFORE INSERT ON events
   FOR EACH ROW EXECUTE FUNCTION assign_event_stream_version();
+ALTER FUNCTION assign_event_stream_version() OWNER TO qembed_event_allocator;
+REVOKE ALL ON FUNCTION assign_event_stream_version() FROM PUBLIC;
 
 CREATE INDEX events_aggregate_order_idx
   ON events (tenant_id, aggregate_type, aggregate_id, stream_version);
@@ -1147,7 +1149,13 @@ BEGIN
       USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
       WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)$p$, t);
   END LOOP;
-END $$;
+END $;
+
+-- The trigger's NOLOGIN owner can mutate only the counter table. Runtime has
+-- no direct counter privileges; the trigger derives tenant/aggregate identity
+-- exclusively from an INSERT already authorized by events RLS.
+CREATE POLICY event_stream_counters_allocator ON event_stream_counters
+  FOR ALL TO qembed_event_allocator USING (true) WITH CHECK (true);
 
 -- These tables are excluded from the generic tenant-only policy loop because
 -- their runtime policy also depends on the parent memory's Caller visibility.
@@ -1603,7 +1611,7 @@ GRANT SELECT (tenant_id, caller_id, principal_kind, disabled_at) ON owner_princi
 GRANT SELECT (tenant_id, caller_id, token_hash, revoked_at) ON owner_credentials TO qembed_runtime;
 GRANT SELECT ON principal_caller_delegations TO qembed_runtime;
 GRANT SELECT, INSERT, UPDATE ON
-  objects, object_versions, callers, object_invocations, invocation_idempotency, event_stream_counters,
+  objects, object_versions, callers, object_invocations, invocation_idempotency,
   interaction_messages, knowledge_revisions, knowledge_documents, knowledge_chunks,
   knowledge_chunk_embeddings, memories, memory_conflicts, memory_embeddings, object_tools,
   tool_command_payloads, tool_executions, object_budgets, budget_reservations,
@@ -1611,6 +1619,7 @@ GRANT SELECT, INSERT, UPDATE ON
   deletion_jobs TO qembed_runtime;
 GRANT INSERT, SELECT ON knowledge_revision_log, snapshots, policy_decisions, events,
   outbox_messages, deletion_ledger TO qembed_runtime;                   -- append-only/event records: no UPDATE
+GRANT SELECT, INSERT, UPDATE ON event_stream_counters TO qembed_event_allocator;
 GRANT INSERT, UPDATE, DELETE ON kill_switches TO qembed_runtime;
 GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddings,
   knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
