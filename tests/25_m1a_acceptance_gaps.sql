@@ -55,7 +55,7 @@ RESET ROLE;
 
 -- T-53: migration guard must abort when a tenant-owned table is omitted from
 -- RLS classification, not merely report it after the migration has completed.
-CREATE TABLE public.tt_unclassified_tenant_probe(tenant_id uuid NOT NULL);
+CREATE TABLE public.tt_unclassified_tenant_probe(tenant_id uuid);
 SELECT tt.try('T-53 RLS migration guard rejects unclassified tenant table','err',
  $q$SELECT assert_tenant_rls_classification()$q$);
 DROP TABLE public.tt_unclassified_tenant_probe;
