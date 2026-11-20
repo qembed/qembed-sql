@@ -852,19 +852,48 @@ CREATE INDEX idx_te_lease ON tool_executions (lease_until) WHERE status = 'Execu
 -- 11. Events and outbox_messages (A6: tenant-consistent FK)
 -- -----------------------------------------------------------------------------
 -- AUDIT-005: exact physical schema from Rust migration 20261118000003_events_outbox.sql.
+CREATE TABLE event_stream_counters (
+  tenant_id UUID NOT NULL,
+  aggregate_type TEXT NOT NULL,
+  aggregate_id UUID NOT NULL,
+  last_stream_version BIGINT NOT NULL CHECK (last_stream_version > 0),
+  PRIMARY KEY (tenant_id, aggregate_type, aggregate_id)
+);
+
 CREATE TABLE events (
   tenant_id UUID NOT NULL,
   event_id UUID NOT NULL,
   aggregate_type TEXT NOT NULL,
   aggregate_id UUID NOT NULL,
+  stream_version BIGINT NOT NULL CHECK (stream_version > 0),
   event_type TEXT NOT NULL,
   payload JSONB NOT NULL,
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, event_id),
-  UNIQUE (event_id)
+  UNIQUE (event_id),
+  UNIQUE (tenant_id, aggregate_type, aggregate_id, stream_version)
 );
+
+-- Allocate stream_version atomically per aggregate. Concurrent writes to the
+-- same stream serialize on its counter row; independent streams do not share a
+-- lock or counter. The caller cannot choose or reuse a version.
+CREATE FUNCTION assign_event_stream_version() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $event_stream_version$
+BEGIN
+  INSERT INTO event_stream_counters
+    (tenant_id, aggregate_type, aggregate_id, last_stream_version)
+  VALUES (NEW.tenant_id, NEW.aggregate_type, NEW.aggregate_id, 1)
+  ON CONFLICT (tenant_id, aggregate_type, aggregate_id)
+  DO UPDATE SET last_stream_version = event_stream_counters.last_stream_version + 1
+  RETURNING last_stream_version INTO NEW.stream_version;
+  RETURN NEW;
+END $event_stream_version$;
+CREATE TRIGGER events_assign_stream_version
+  BEFORE INSERT ON events
+  FOR EACH ROW EXECUTE FUNCTION assign_event_stream_version();
+
 CREATE INDEX events_aggregate_order_idx
-  ON events (tenant_id, aggregate_type, aggregate_id, occurred_at, event_id);
+  ON events (tenant_id, aggregate_type, aggregate_id, stream_version);
 
 CREATE FUNCTION reject_event_mutation() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $event_append_only$
@@ -1098,7 +1127,7 @@ BEGIN
     'tool_command_payloads','tool_executions','events','outbox_messages','object_budgets',
     'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters','budget_event_dedup',
     'object_goals','object_tasks','deletion_jobs','deletion_ledger',
-    'principal_caller_delegations']
+    'principal_caller_delegations','event_stream_counters']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
@@ -1107,6 +1136,31 @@ BEGIN
       WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)$p$, t);
   END LOOP;
 END $$;
+
+-- Fail the clean-schema migration closed if any tenant-owned table was
+-- omitted from the RLS classification or lacks the runtime tenant policy.
+DO $rls_audit$
+DECLARE bad_tables TEXT;
+BEGIN
+  SELECT string_agg(format('%I', c.relname), ', ' ORDER BY c.relname)
+    INTO bad_tables
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped AND a.attnotnull
+   WHERE n.nspname='public' AND c.relkind IN ('r','p')
+     AND c.relname NOT IN ('owner_principals','owner_credentials')
+     AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
+       SELECT 1 FROM pg_policy p
+        WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
+          AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
+          AND p.polcmd='*'
+     ));
+  IF bad_tables IS NOT NULL THEN
+    RAISE EXCEPTION 'tenant RLS classification incomplete: %', bad_tables
+      USING ERRCODE = '55000';
+  END IF;
+END $rls_audit$;
 
 -- These tables are excluded from the generic tenant-only policy loop because
 -- their runtime policy also depends on the parent memory's Caller visibility.
