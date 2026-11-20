@@ -13,7 +13,7 @@ CREATE TEMP TABLE sj AS SELECT convert_to('{"k":2}','UTF8') AS b;
 SELECT tt.try('snapshot insert ok','ok',$q$INSERT INTO snapshots(tenant_id,snapshot_id,object_id,object_version_id,schema_version,canonical_json,content_hash,json_projection)
  SELECT current_setting('app.tenant_id')::uuid,'5a000000-0000-0000-0000-000000000001','0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest(b,'sha256'),convert_from(b,'UTF8')::jsonb FROM sj$q$);
 SELECT tt.try('snapshot hash verification remains at Rust read boundary','ok',$q$INSERT INTO snapshots(tenant_id,snapshot_id,object_id,object_version_id,schema_version,canonical_json,content_hash,json_projection)
- SELECT current_setting('app.tenant_id')::uuid,gen_random_uuid(),'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,decode(repeat('00',32),'hex'),convert_from(b,'UTF8')::jsonb FROM sj$q$);
+ SELECT current_setting('app.tenant_id')::uuid,gen_random_uuid(),'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,decode(repeat('01',32),'hex'),convert_from(b,'UTF8')::jsonb FROM sj$q$);
 SELECT tt.try('snapshot projection mismatch rejected','err',$q$INSERT INTO snapshots(tenant_id,snapshot_id,object_id,object_version_id,schema_version,canonical_json,content_hash,json_projection)
  SELECT current_setting('app.tenant_id')::uuid,gen_random_uuid(),'0b000000-0000-0000-0000-000000000001','0c000000-0000-0000-0000-000000000002',1,b,digest(b,'sha256'),'{"k":3}'::jsonb FROM sj$q$);
 SELECT tt.try('snapshot UPDATE denied','err',$q$UPDATE snapshots SET json_projection='{"tampered":true}'::jsonb$q$);
