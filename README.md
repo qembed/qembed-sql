@@ -7,7 +7,7 @@
 - `ADR_RT-049_Caller_Memory_RLS.md` — Caller-level episodic memory isolation decision (r4).
 - `ADR_RUST-044_Identical_Content_Version_Deduplication.md` — approved application contract for identical canonical content; no DDL change.
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
-- `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40, включая 17_tenant_rls.sql и 24_caller_memory_rls.sql; `05_rust_physical_contract.sql` — контракт физических имён/ключей Rust). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`.
+- `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40, включая 17_tenant_rls.sql и 24_caller_memory_rls.sql; `05_rust_physical_contract.sql` — контракт физических имён/ключей Rust). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`; `.github/workflows/sql-smoke.yml` запускает smoke suite на PostgreSQL 16 для PR и push в master.
 - `Qembed_Object_Runtime_M0_v2_3_3_FINAL_TZ.pdf`, `Qembed_M0_v2_3_3_Diagrams.pdf` — **не пересобирались, содержимое r1**. Нормативны `.md` (addendum r3 имеет приоритет по §1); PDF с addendum r1 устарел в части §9–§10.
 
 ## Что исправлено в r3 (SQL)
