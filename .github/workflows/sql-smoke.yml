@@ -9,6 +9,17 @@ on:
 
 jobs:
   postgres-smoke:
+    name: PostgreSQL ${{ matrix.postgres }} / pgvector 0.8.7
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - postgres: "15"
+            image: pgvector/pgvector:0.8.7-pg15-bookworm
+          - postgres: "16"
+            image: pgvector/pgvector:0.8.7-pg16-bookworm
+          - postgres: "19"
+            image: pgvector/pgvector:0.8.7-pg19-bookworm
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -17,12 +28,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
-      - name: Start PostgreSQL 16 with pgvector
+      - name: Start PostgreSQL ${{ matrix.postgres }} with pgvector
         run: |
           docker run --detach --name qembed-postgres \
             --publish 5432:5432 \
             --env POSTGRES_PASSWORD=postgres \
-            pgvector/pgvector:0.8.7-pg16-bookworm
+            ${{ matrix.image }}
           for attempt in $(seq 1 60); do
             if docker exec qembed-postgres pg_isready -U postgres -d postgres; then
               exit 0

@@ -33,9 +33,10 @@ SELECT tt.chk('AUDIT-006 all tenant-owned tables have ENABLE+FORCE RLS and runti
     FROM pg_class c
     JOIN pg_namespace n ON n.oid=c.relnamespace
     JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnum>0 AND NOT a.attisdropped
-   WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.attnotnull
-     AND c.relname NOT IN ('owner_principals','owner_credentials')
-     AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
+   WHERE n.nspname='public' AND c.relkind IN ('r','p')
+     AND c.relname NOT IN ('owner_principals','owner_credentials','principals','kill_switches')
+     AND (NOT a.attnotnull OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
+
        SELECT 1 FROM pg_policy p
        WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
          AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
@@ -45,6 +46,13 @@ SELECT tt.chk('AUDIT-006 all tenant-owned tables have ENABLE+FORCE RLS and runti
 SELECT tt.chk('AUDIT-006 pre-auth owner tables remain outside tenant RLS',
  $q$SELECT bool_and(NOT c.relrowsecurity AND NOT c.relforcerowsecurity)
     FROM pg_class c WHERE c.oid IN ('public.owner_principals'::regclass,'public.owner_credentials'::regclass)$q$);
+SELECT tt.chk('AUDIT-006 restricted-global tables retain nullable FORCE-RLS classification',
+ $q$SELECT bool_and(NOT a.attnotnull AND c.relrowsecurity AND c.relforcerowsecurity)
+    FROM pg_class c
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped
+   WHERE c.oid IN ('public.principals'::regclass,'public.kill_switches'::regclass)$q$);
+
 SELECT tt.chk('AUDIT-006 pre-auth owner grants remain column-limited',
  $q$SELECT has_column_privilege('qembed_runtime','owner_principals','tenant_id','SELECT')
     AND has_column_privilege('qembed_runtime','owner_principals','disabled_at','SELECT')

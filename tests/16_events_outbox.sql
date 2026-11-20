@@ -4,7 +4,7 @@ SET client_min_messages=warning;
 
 SELECT tt.chk('AUDIT-005 events has exactly the Rust columns',
  $q$SELECT string_agg(attname, ',' ORDER BY attnum)
-      = 'tenant_id,event_id,aggregate_type,aggregate_id,event_type,payload,occurred_at'
+      = 'tenant_id,event_id,aggregate_type,aggregate_id,stream_version,event_type,payload,occurred_at'
     FROM pg_attribute WHERE attrelid='public.events'::regclass AND attnum>0 AND NOT attisdropped$q$);
 SELECT tt.chk('AUDIT-005 outbox_messages has exactly the Rust columns',
  $q$SELECT string_agg(attname, ',' ORDER BY attnum)
@@ -13,7 +13,14 @@ SELECT tt.chk('AUDIT-005 outbox_messages has exactly the Rust columns',
 SELECT tt.chk('AUDIT-005 event aggregate ordering index exists',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
    AND indexname='events_aggregate_order_idx'
-   AND indexdef LIKE '%(tenant_id, aggregate_type, aggregate_id, occurred_at, event_id)%')$q$);
+   AND indexdef LIKE '%(tenant_id, aggregate_type, aggregate_id, stream_version)%')$q$);
+SELECT tt.chk('T-29 unique monotonic event stream key exists',
+ $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
+   AND indexname='events_stream_version_unique'
+   AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%stream_version%')$q$);
+SELECT tt.chk('T-29 event stream counter is tenant RLS protected',
+ $q$SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.event_stream_counters'::regclass$q$);
+
 SELECT tt.chk('AUDIT-005 pending outbox index matches delivered_at predicate',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
    AND indexname='outbox_pending_idx'

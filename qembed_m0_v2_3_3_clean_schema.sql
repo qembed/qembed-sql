@@ -38,20 +38,23 @@ DO $$
 DECLARE r TEXT;
 BEGIN
   FOREACH r IN ARRAY ARRAY['qembed_runtime','qembed_dispatcher','qembed_admin',
-                           'qembed_retention','qembed_definer']
+                           'qembed_retention','qembed_definer','qembed_event_allocator']
   LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
       EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS', r);
     END IF;
   END LOOP;
 END $$;
+ALTER ROLE qembed_event_allocator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+GRANT USAGE ON SCHEMA public TO qembed_event_allocator;
 -- qembed_definer: NOLOGIN owner of SECURITY DEFINER functions (A2). Subject to
 -- RLS; sees data only through explicit policies defined in section 20.
 
 -- SECURITY DEFINER functions use this schema in their fixed search_path.
 -- Application and PUBLIC roles must never be able to shadow objects there.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer;
+REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer, qembed_event_allocator;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM qembed_event_allocator;
 
 -- -----------------------------------------------------------------------------
 -- 1. Guards
@@ -88,6 +91,9 @@ CREATE TABLE tool_versions (
   CHECK (risk_level IN ('R0','R1') OR idempotent),
   UNIQUE (tool_id, version), UNIQUE (tool_id, id)
 );
+CREATE TRIGGER tool_versions_immutable
+  BEFORE UPDATE OR DELETE ON tool_versions
+  FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
 
 -- -----------------------------------------------------------------------------
 -- 3. Tenants, principals
@@ -798,6 +804,10 @@ CREATE TABLE policy_decisions (
   UNIQUE (tenant_id, object_id, id),
   UNIQUE (tenant_id, object_id, invocation_id, id),
   UNIQUE (tenant_id, object_id, invocation_id, id, decision),
+  -- One composite key binds every execution claim to the exact immutable Allow decision.
+  UNIQUE (tenant_id, object_id, invocation_id, id, decision, command_id,
+          caller_id, snapshot_id, tool_id, tool_version_id, binding_version,
+          operation, arguments_hash),
   UNIQUE (tenant_id, command_id),
   FOREIGN KEY (tenant_id, object_id, caller_id, invocation_id)
     REFERENCES object_invocations(tenant_id, object_id, caller_id, id),
@@ -838,8 +848,12 @@ CREATE TABLE tool_executions (
   CHECK ((lease_owner IS NULL) = (lease_until IS NULL)),
   UNIQUE (tenant_id, command_id),
   UNIQUE (tenant_id, decision_id),
-  FOREIGN KEY (tenant_id, object_id, invocation_id, decision_id, decision)
-    REFERENCES policy_decisions(tenant_id, object_id, invocation_id, id, decision),
+  FOREIGN KEY (tenant_id, object_id, invocation_id, decision_id, decision,
+               command_id, caller_id, snapshot_id, tool_id, tool_version_id,
+               binding_version, operation, arguments_hash)
+    REFERENCES policy_decisions(tenant_id, object_id, invocation_id, id, decision,
+               command_id, caller_id, snapshot_id, tool_id, tool_version_id,
+               binding_version, operation, arguments_hash),
   FOREIGN KEY (tenant_id, command_id) REFERENCES policy_decisions(tenant_id, command_id),
   FOREIGN KEY (tenant_id, object_id, caller_id, invocation_id)
     REFERENCES object_invocations(tenant_id, object_id, caller_id, id),
@@ -852,19 +866,58 @@ CREATE INDEX idx_te_lease ON tool_executions (lease_until) WHERE status = 'Execu
 -- 11. Events and outbox_messages (A6: tenant-consistent FK)
 -- -----------------------------------------------------------------------------
 -- AUDIT-005: exact physical schema from Rust migration 20261118000003_events_outbox.sql.
+CREATE TABLE event_stream_counters (
+  tenant_id UUID NOT NULL,
+  aggregate_type TEXT NOT NULL,
+  aggregate_id UUID NOT NULL,
+  last_stream_version BIGINT NOT NULL CHECK (last_stream_version > 0),
+  PRIMARY KEY (tenant_id, aggregate_type, aggregate_id)
+);
+
 CREATE TABLE events (
   tenant_id UUID NOT NULL,
   event_id UUID NOT NULL,
   aggregate_type TEXT NOT NULL,
   aggregate_id UUID NOT NULL,
+  stream_version BIGINT NOT NULL CHECK (stream_version > 0),
   event_type TEXT NOT NULL,
   payload JSONB NOT NULL,
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, event_id),
-  UNIQUE (event_id)
+  UNIQUE (event_id),
+  CONSTRAINT events_stream_version_unique UNIQUE (tenant_id, aggregate_type, aggregate_id, stream_version)
 );
+
+-- Allocate stream_version atomically per aggregate. Concurrent writes to the
+-- same stream serialize on its counter row; independent streams do not share a
+-- lock or counter. The caller cannot choose or reuse a version.
+CREATE FUNCTION assign_event_stream_version() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $event_stream_version$
+BEGIN
+  IF NEW.stream_version IS NOT NULL THEN
+    RAISE EXCEPTION 'event stream_version is database-assigned'
+      USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO event_stream_counters
+    (tenant_id, aggregate_type, aggregate_id, last_stream_version)
+  VALUES (NEW.tenant_id, NEW.aggregate_type, NEW.aggregate_id, 1)
+  ON CONFLICT (tenant_id, aggregate_type, aggregate_id)
+  DO UPDATE SET last_stream_version = event_stream_counters.last_stream_version + 1
+  RETURNING last_stream_version INTO NEW.stream_version;
+  RETURN NEW;
+END $event_stream_version$;
+CREATE TRIGGER events_assign_stream_version
+  BEFORE INSERT ON events
+  FOR EACH ROW EXECUTE FUNCTION assign_event_stream_version();
+GRANT qembed_event_allocator TO CURRENT_USER;
+GRANT CREATE ON SCHEMA public TO qembed_event_allocator;
+ALTER FUNCTION assign_event_stream_version() OWNER TO qembed_event_allocator;
+REVOKE CREATE ON SCHEMA public FROM qembed_event_allocator;
+REVOKE qembed_event_allocator FROM CURRENT_USER;
+REVOKE ALL ON FUNCTION assign_event_stream_version() FROM PUBLIC;
+
 CREATE INDEX events_aggregate_order_idx
-  ON events (tenant_id, aggregate_type, aggregate_id, occurred_at, event_id);
+  ON events (tenant_id, aggregate_type, aggregate_id, stream_version);
 
 CREATE FUNCTION reject_event_mutation() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $event_append_only$
@@ -1098,7 +1151,7 @@ BEGIN
     'tool_command_payloads','tool_executions','events','outbox_messages','object_budgets',
     'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters','budget_event_dedup',
     'object_goals','object_tasks','deletion_jobs','deletion_ledger',
-    'principal_caller_delegations']
+    'principal_caller_delegations','event_stream_counters']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
@@ -1107,6 +1160,12 @@ BEGIN
       WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)$p$, t);
   END LOOP;
 END $$;
+
+-- The trigger's NOLOGIN owner can mutate only the counter table. Runtime has
+-- no direct counter privileges; the trigger derives tenant/aggregate identity
+-- exclusively from an INSERT already authorized by events RLS.
+CREATE POLICY event_stream_counters_allocator ON event_stream_counters
+  FOR ALL TO qembed_event_allocator USING (true) WITH CHECK (true);
 
 -- These tables are excluded from the generic tenant-only policy loop because
 -- their runtime policy also depends on the parent memory's Caller visibility.
@@ -1226,6 +1285,127 @@ CREATE POLICY admin_objects ON objects TO qembed_admin USING (true) WITH CHECK (
 -- provisioning failed with 42501 on knowledge_revisions.
 CREATE POLICY admin_knowledge_revisions ON knowledge_revisions FOR SELECT TO qembed_admin USING (true);
 CREATE POLICY admin_knowledge_revisions_ins ON knowledge_revisions FOR INSERT TO qembed_admin WITH CHECK (current_revision = 0);
+
+-- Reusable catalog assertion: migrations call this before becoming usable,
+-- and regression tests deliberately create an unclassified tenant table to
+-- prove the guard aborts rather than silently accepting an incomplete policy set.
+CREATE FUNCTION assert_tenant_rls_classification() RETURNS void
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $rls_audit$
+DECLARE bad_tables TEXT;
+        missing_tables TEXT;
+        unclassified_tables TEXT;
+BEGIN
+  -- Positive allowlist: a new tenant-owned table cannot escape the audit by
+  -- omitting tenant_id entirely or by being left out of the generic RLS loop.
+  SELECT string_agg(expected.table_name, ', ' ORDER BY expected.table_name)
+    INTO missing_tables
+    FROM unnest(ARRAY[
+      'objects','object_versions','callers','principal_caller_delegations',
+      'snapshots','object_invocations','invocation_idempotency','interaction_messages',
+      'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
+      'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
+      'object_tools','policy_decisions','tool_command_payloads','tool_executions',
+      'event_stream_counters','events','outbox_messages','object_budgets',
+      'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters',
+      'budget_event_dedup','object_goals','object_tasks','deletion_jobs','deletion_ledger'
+    ]) AS expected(table_name)
+    LEFT JOIN pg_class c ON c.relname=expected.table_name
+      AND c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p')
+    LEFT JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped
+   WHERE c.oid IS NULL OR a.attnum IS NULL OR NOT a.attnotnull
+      OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+      OR NOT EXISTS (
+        SELECT 1 FROM pg_policy p
+         WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
+           AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
+           AND p.polcmd='*'
+      );
+  IF missing_tables IS NOT NULL THEN
+    RAISE EXCEPTION 'expected tenant-owned tables are missing tenant/RLS classification: %', missing_tables
+      USING ERRCODE = '55000';
+  END IF;
+
+  -- Negative allowlist: every additional table with tenant_id must be either
+  -- tenant-owned under the generic policy or an explicit reviewed exception.
+  SELECT string_agg(format('%I', c.relname), ', ' ORDER BY c.relname)
+    INTO bad_tables
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped
+   WHERE n.nspname='public' AND c.relkind IN ('r','p')
+     AND c.relname NOT IN ('owner_principals','owner_credentials','principals','kill_switches')
+     AND (NOT a.attnotnull OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
+       SELECT 1 FROM pg_policy p
+        WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
+          AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
+          AND p.polcmd='*'
+     ));
+  IF bad_tables IS NOT NULL THEN
+    RAISE EXCEPTION 'tenant RLS classification incomplete: %', bad_tables
+      USING ERRCODE = '55000';
+  END IF;
+
+  -- Every public base table must belong to an explicit tenant-owned,
+  -- restricted-global, pre-auth, or global classification. This catches a
+  -- newly introduced table that omits tenant_id altogether.
+  SELECT string_agg(c.relname, ', ' ORDER BY c.relname)
+    INTO unclassified_tables
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname='public' AND c.relkind IN ('r','p')
+     AND c.relname <> ALL (ARRAY[
+       'embedding_models','tool_definitions','tool_versions','tenants',
+       'principals','owner_principals','owner_credentials',
+       'objects','object_versions','callers','principal_caller_delegations',
+       'snapshots','object_invocations','invocation_idempotency','interaction_messages',
+       'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
+       'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
+       'object_tools','policy_decisions','tool_command_payloads','tool_executions',
+       'event_stream_counters','events','outbox_messages','object_budgets',
+       'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters',
+       'budget_event_dedup','rate_limit_buckets','kill_switches','object_goals',
+       'object_tasks','deletion_jobs','deletion_ledger','retention_log'
+     ]);
+  IF unclassified_tables IS NOT NULL THEN
+    RAISE EXCEPTION 'public tables lack an explicit tenant/global classification: %', unclassified_tables
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped
+    WHERE n.nspname='public' AND c.relname IN ('principals','kill_switches')
+      AND (
+        a.attnotnull OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+        OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid
+          AND p.polname=CASE c.relname WHEN 'principals' THEN 'own_tenant' ELSE 'ks_read' END
+          AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
+          AND p.polcmd='r')
+      )
+  ) THEN
+    RAISE EXCEPTION 'restricted-global tenant_id tables lost nullable FORCE-RLS classification'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped
+    WHERE n.nspname='public' AND c.relname IN ('owner_principals','owner_credentials')
+      AND (NOT a.attnotnull OR c.relrowsecurity OR c.relforcerowsecurity)
+  ) THEN
+    RAISE EXCEPTION 'pre-auth owner tables lost their explicit column-grant classification'
+      USING ERRCODE = '55000';
+  END IF;
+END $rls_audit$;
+REVOKE ALL ON FUNCTION assert_tenant_rls_classification() FROM PUBLIC;
+SELECT assert_tenant_rls_classification();
+
 
 -- -----------------------------------------------------------------------------
 -- 16. SECURITY DEFINER functions (owner qembed_definer; fixed search_path)
@@ -1449,6 +1629,7 @@ GRANT SELECT, INSERT, UPDATE ON
   deletion_jobs TO qembed_runtime;
 GRANT INSERT, SELECT ON knowledge_revision_log, snapshots, policy_decisions, events,
   outbox_messages, deletion_ledger TO qembed_runtime;                   -- append-only/event records: no UPDATE
+GRANT SELECT, INSERT, UPDATE ON event_stream_counters TO qembed_event_allocator;
 GRANT INSERT, UPDATE, DELETE ON kill_switches TO qembed_runtime;
 GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddings,
   knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
