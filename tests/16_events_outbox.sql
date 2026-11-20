@@ -16,7 +16,7 @@ SELECT tt.chk('AUDIT-005 event aggregate ordering index exists',
    AND indexdef LIKE '%(tenant_id, aggregate_type, aggregate_id, stream_version)%')$q$);
 SELECT tt.chk('T-29 unique monotonic event stream key exists',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
-   AND indexname='events_tenant_id_aggregate_type_aggregate_id_stream_version_key'
+   AND indexname='events_stream_version_unique'
    AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%stream_version%')$q$);
 SELECT tt.chk('T-29 event stream counter is tenant RLS protected',
  $q$SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.event_stream_counters'::regclass$q$);
