@@ -5,7 +5,7 @@ SELECT tt.chk('AUDIT-010 public schema is not writable by PUBLIC',
   $q$SELECT NOT has_schema_privilege('public','public','CREATE')$q$);
 SELECT tt.chk('AUDIT-010 application roles cannot create in public',
   $q$SELECT bool_and(NOT has_schema_privilege(r,'public','CREATE'))
-       FROM unnest(ARRAY['qembed_runtime','qembed_dispatcher','qembed_admin','qembed_retention','qembed_definer']) AS r$q$);
+       FROM unnest(ARRAY['qembed_runtime','qembed_dispatcher','qembed_admin','qembed_retention','qembed_definer','qembed_event_allocator']) AS r$q$);
 
 SET ROLE qembed_runtime;
 -- A caller may create temporary objects, but they must not shadow relations used
@@ -59,11 +59,28 @@ SELECT tt.chk('AUDIT-010 reason payload was stored literally',
 SELECT tt.chk('AUDIT-010 definer role is isolated and non-login',
   $q$SELECT NOT rolcanlogin AND NOT rolsuper AND NOT rolbypassrls
        FROM pg_roles WHERE rolname='qembed_definer'$q$);
+SELECT tt.chk('AUDIT-010 allocator role is isolated and non-login',
+  $q$SELECT NOT rolcanlogin AND NOT rolsuper AND NOT rolbypassrls
+       FROM pg_roles WHERE rolname='qembed_event_allocator'$q$);
 SELECT tt.chk('AUDIT-010 no application role is a member of definer',
   $q$SELECT NOT pg_has_role('qembed_runtime','qembed_definer','MEMBER')
         AND NOT pg_has_role('qembed_dispatcher','qembed_definer','MEMBER')
         AND NOT pg_has_role('qembed_admin','qembed_definer','MEMBER')
         AND NOT pg_has_role('qembed_retention','qembed_definer','MEMBER')$q$);
+
+SELECT tt.chk('AUDIT-010 event stream allocator is an isolated definer trigger',
+  $q$SELECT pg_get_userbyid(proowner)='qembed_event_allocator'
+       AND prosecdef
+       AND proconfig @> ARRAY['search_path=pg_catalog, public']
+       AND NOT has_function_privilege('public',p.oid,'EXECUTE')
+       FROM pg_proc p WHERE proname='assign_event_stream_version'
+         AND pronamespace='public'::regnamespace$q$);
+SELECT tt.chk('AUDIT-010 only isolated allocator can mutate stream counters',
+  $q$SELECT has_table_privilege('qembed_event_allocator','public.event_stream_counters','UPDATE')
+       AND NOT has_table_privilege('qembed_runtime','public.event_stream_counters','UPDATE')
+       AND NOT has_table_privilege('qembed_dispatcher','public.event_stream_counters','UPDATE')
+       AND NOT pg_has_role('qembed_runtime','qembed_event_allocator','MEMBER')
+       AND NOT pg_has_role('qembed_dispatcher','qembed_event_allocator','MEMBER')$q$);
 
 SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PUBLIC-executable',
   $q$SELECT count(*)=9 AND bool_and(
