@@ -53,12 +53,20 @@ SELECT tt.try('T-29 caller cannot choose stream_version','err',
             '29000000-0000-0000-0000-000000000010',999,'forged','{}')$q$);
 RESET ROLE;
 
--- T-53: migration guard must abort when a tenant-owned table is omitted from
--- RLS classification, not merely report it after the migration has completed.
+-- T-53: the migration guard must catch both a new table misclassified as
+-- global (nullable tenant_id) and an expected tenant-owned table omitted from
+-- the explicit classification inventory.
+SELECT tt.try('T-53 current RLS classification passes the migration guard','ok',
+ $q$SELECT assert_tenant_rls_classification()$q$);
 CREATE TABLE public.tt_unclassified_tenant_probe(tenant_id uuid);
-SELECT tt.try('T-53 RLS migration guard rejects unclassified tenant table','err',
+SELECT tt.try('T-53 RLS migration guard rejects nullable tenant table','err',
  $q$SELECT assert_tenant_rls_classification()$q$);
 DROP TABLE public.tt_unclassified_tenant_probe;
+
+ALTER TABLE event_stream_counters RENAME TO tt_missing_event_stream_counters;
+SELECT tt.try('T-53 RLS migration guard rejects omitted expected tenant table','err',
+ $q$SELECT assert_tenant_rls_classification()$q$);
+ALTER TABLE tt_missing_event_stream_counters RENAME TO event_stream_counters;
 
 -- T-55: cross-claim integrity. Build a second Object/snapshot under the same
 -- tenant, then ensure decision/execution rows cannot mix its claims.
