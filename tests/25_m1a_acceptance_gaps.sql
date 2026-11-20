@@ -140,3 +140,7 @@ SELECT tt.try('T-55 execution cannot change the arguments hash claim','err',
  $q$INSERT INTO tool_executions(id,tenant_id,object_id,invocation_id,caller_id,decision_id,command_id,tool_id,tool_version_id,snapshot_id,binding_version,operation,arguments_hash,status)
     VALUES (gen_random_uuid(),'aaaaaaaa-0000-0000-0000-000000000001','0b000000-0000-0000-0000-000000000001','1a000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000001','55000000-0000-0000-0000-000000000010','55000000-0000-0000-0000-000000000020','11111111-0000-0000-0000-000000000001','11111111-0000-0000-0000-0000000000a1','5a000000-0000-0000-0000-000000000001',1,'op-a',digest('forged','sha256'),'Authorized')$q$);
 RESET ROLE;
+
+SELECT tt.try('T-55 execution cannot claim a different tenant','err',
+ $q$INSERT INTO tool_executions(id,tenant_id,object_id,invocation_id,caller_id,decision_id,command_id,tool_id,tool_version_id,snapshot_id,binding_version,operation,arguments_hash,status)
+    VALUES (gen_random_uuid(),'bbbbbbbb-0000-0000-0000-000000000002','0b000000-0000-0000-0000-000000000001','1a000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000001','55000000-0000-0000-0000-000000000010','55000000-0000-0000-0000-000000000020','11111111-0000-0000-0000-000000000001','11111111-0000-0000-0000-0000000000a1','5a000000-0000-0000-0000-000000000001',1,'op-a',digest('a','sha256'),'Authorized')$q$);
