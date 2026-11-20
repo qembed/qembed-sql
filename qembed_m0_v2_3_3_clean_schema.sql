@@ -1,11 +1,12 @@
 -- =============================================================================
--- Qembed Object Runtime — M0 v2.3.3 CLEAN SCHEMA CANDIDATE r3 (fresh install only)
+-- Qembed Object Runtime — M0 v2.3.3 CLEAN SCHEMA CANDIDATE r4 (fresh install only)
 -- PostgreSQL 15+, pgvector >= 0.8. Apply as qembed_migrator (table owner).
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
+-- r4: implements T-27 Caller-level episodic memory RLS (see Addendum §11 and ADR RT-049).
 -- Rust-compat remediation: AUDIT-001..009 applied (physical contracts, owner auth, objects, snapshots, events/outbox, tenant RLS, composite tenant FKs, Invocation lifecycle/fencing).
--- AUDIT-010 is the final security-hardening patch.
+-- AUDIT-010 SECURITY DEFINER hardening; r4 adds caller-scoped memory isolation.
 -- =============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
