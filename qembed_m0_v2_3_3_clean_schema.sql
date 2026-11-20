@@ -1275,6 +1275,7 @@ CREATE FUNCTION assert_tenant_rls_classification() RETURNS void
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $rls_audit$
 DECLARE bad_tables TEXT;
         missing_tables TEXT;
+        unclassified_tables TEXT;
 BEGIN
   -- Positive allowlist: a new tenant-owned table cannot escape the audit by
   -- omitting tenant_id entirely or by being left out of the generic RLS loop.
@@ -1328,13 +1329,45 @@ BEGIN
       USING ERRCODE = '55000';
   END IF;
 
+  -- Every public base table must belong to an explicit tenant-owned,
+  -- restricted-global, pre-auth, or global classification. This catches a
+  -- newly introduced table that omits tenant_id altogether.
+  SELECT string_agg(c.relname, ', ' ORDER BY c.relname)
+    INTO unclassified_tables
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname='public' AND c.relkind IN ('r','p')
+     AND c.relname <> ALL (ARRAY[
+       'embedding_models','tool_definitions','tool_versions','tenants',
+       'principals','owner_principals','owner_credentials',
+       'objects','object_versions','callers','principal_caller_delegations',
+       'snapshots','object_invocations','invocation_idempotency','interaction_messages',
+       'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
+       'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
+       'object_tools','policy_decisions','tool_command_payloads','tool_executions',
+       'event_stream_counters','events','outbox_messages','object_budgets',
+       'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters',
+       'budget_event_dedup','rate_limit_buckets','kill_switches','object_goals',
+       'object_tasks','deletion_jobs','deletion_ledger','retention_log'
+     ]);
+  IF unclassified_tables IS NOT NULL THEN
+    RAISE EXCEPTION 'public tables lack an explicit tenant/global classification: %', unclassified_tables
+      USING ERRCODE = '55000';
+  END IF;
+
   IF EXISTS (
     SELECT 1 FROM pg_class c
     JOIN pg_namespace n ON n.oid=c.relnamespace
     JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
       AND a.attnum>0 AND NOT a.attisdropped
     WHERE n.nspname='public' AND c.relname IN ('principals','kill_switches')
-      AND (a.attnotnull OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
+      AND (
+        a.attnotnull OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+        OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid
+          AND p.polname=CASE c.relname WHEN 'principals' THEN 'own_tenant' ELSE 'ks_read' END
+          AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
+          AND p.polcmd='r')
+      )
   ) THEN
     RAISE EXCEPTION 'restricted-global tenant_id tables lost nullable FORCE-RLS classification'
       USING ERRCODE = '55000';
