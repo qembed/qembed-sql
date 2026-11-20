@@ -51,6 +51,11 @@ SELECT tt.try('T-29 caller cannot choose stream_version','err',
  $q$INSERT INTO events(tenant_id,event_id,aggregate_type,aggregate_id,stream_version,event_type,payload)
     VALUES ('aaaaaaaa-0000-0000-0000-000000000001',gen_random_uuid(),'invocation',
             '29000000-0000-0000-0000-000000000010',999,'forged','{}')$q$);
+SELECT tt.try('T-29 runtime cannot mutate allocator counter directly','err',
+ $q$UPDATE event_stream_counters SET last_stream_version=999
+    WHERE tenant_id='aaaaaaaa-0000-0000-0000-000000000001'
+      AND aggregate_type='invocation'
+      AND aggregate_id='29000000-0000-0000-0000-000000000010'$q$);
 RESET ROLE;
 
 -- T-53: the migration guard must catch both a new table misclassified as
