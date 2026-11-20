@@ -1155,7 +1155,7 @@ BEGIN
       USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
       WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)$p$, t);
   END LOOP;
-END $;
+END $$;
 
 -- The trigger's NOLOGIN owner can mutate only the counter table. Runtime has
 -- no direct counter privileges; the trigger derives tenant/aggregate identity
