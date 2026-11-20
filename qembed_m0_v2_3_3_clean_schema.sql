@@ -1520,32 +1520,56 @@ CREATE TRIGGER trg_policy_decision_invocation_guard
   EXECUTE FUNCTION policy_decision_invocation_guard();
 
 -- A published version cannot be superseded while the object still points to it (checked at COMMIT, r3).
-CREATE OR REPLACE FUNCTION object_versions_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION object_versions_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $object_version_guard_r3$
 BEGIN
+  -- New rows are always Draft. This branch must precede every OLD-row check:
+  -- OLD is not populated for INSERT, and treating it like an UPDATE rejects
+  -- every legitimate ObjectVersion creation as an identity mutation.
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status <> 'draft' THEN
+      RAISE EXCEPTION 'new object versions must start as Draft' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
-    IF OLD.status <> 'draft' THEN RAISE EXCEPTION 'published version is immutable'; END IF;
+    IF OLD.status <> 'draft' THEN
+      RAISE EXCEPTION 'only draft object versions may be deleted' USING ERRCODE = '55000';
+    END IF;
     RETURN OLD;
   END IF;
-  IF OLD.status <> 'draft' THEN
-    IF OLD.status = 'published' AND NEW.status = 'superseded' AND
-       (NEW.object_version_id, NEW.tenant_id, NEW.object_id, NEW.config, NEW.chat_model_ref,
-        NEW.embedding_model_id, NEW.version_number, NEW.published_at, NEW.created_at)
+
+  IF (NEW.object_version_id, NEW.tenant_id, NEW.object_id, NEW.version_number, NEW.created_at)
+     IS DISTINCT FROM
+     (OLD.object_version_id, OLD.tenant_id, OLD.object_id, OLD.version_number, OLD.created_at) THEN
+    RAISE EXCEPTION 'object version identity is immutable' USING ERRCODE = '55000';
+  END IF;
+
+  IF OLD.status = 'draft' THEN
+    IF NEW.status NOT IN ('draft', 'published') THEN
+      RAISE EXCEPTION 'invalid object version transition: % -> %', OLD.status, NEW.status
+        USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF OLD.status = 'published' AND NEW.status = 'superseded' THEN
+    IF (NEW.config, NEW.chat_model_ref, NEW.embedding_model_id, NEW.published_at)
        IS NOT DISTINCT FROM
-       (OLD.object_version_id, OLD.tenant_id, OLD.object_id, OLD.config, OLD.chat_model_ref,
-        OLD.embedding_model_id, OLD.version_number, OLD.published_at, OLD.created_at)
-    THEN
-      -- r3 (R3-01): the pointer check is DEFERRED to COMMIT (constraint trigger below);
-      -- an immediate check made re-publication impossible (uq_ov_one_published forbids
-      -- two published rows, the pointer cannot move before the new row is published).
+       (OLD.config, OLD.chat_model_ref, OLD.embedding_model_id, OLD.published_at) THEN
+      -- R3-01: defer the published-pointer check to COMMIT so republish can
+      -- supersede the old version, publish the replacement, and move the pointer
+      -- atomically in one transaction.
       RETURN NEW;
     END IF;
-    RAISE EXCEPTION 'published version is immutable';
+    RAISE EXCEPTION 'published object version content is immutable' USING ERRCODE = '55000';
   END IF;
-  IF NEW.status = 'superseded' THEN RAISE EXCEPTION 'invalid transition'; END IF;
-  IF (NEW.object_version_id, NEW.tenant_id, NEW.object_id) IS DISTINCT FROM (OLD.object_version_id, OLD.tenant_id, OLD.object_id)
-  THEN RAISE EXCEPTION 'identity columns are immutable'; END IF;
-  RETURN NEW;
-END $$;
+
+  RAISE EXCEPTION 'invalid or terminal object version transition: % -> %', OLD.status, NEW.status
+    USING ERRCODE = '23514';
+END
+$object_version_guard_r3$;
 
 -- r3 (R3-01): deferred pointer check. Re-publication transaction order:
 --   1) UPDATE old version  published -> superseded
