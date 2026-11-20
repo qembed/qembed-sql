@@ -798,6 +798,10 @@ CREATE TABLE policy_decisions (
   UNIQUE (tenant_id, object_id, id),
   UNIQUE (tenant_id, object_id, invocation_id, id),
   UNIQUE (tenant_id, object_id, invocation_id, id, decision),
+  -- One composite key binds every execution claim to the exact immutable Allow decision.
+  UNIQUE (tenant_id, object_id, invocation_id, id, decision, command_id,
+          caller_id, snapshot_id, tool_id, tool_version_id, binding_version,
+          operation, arguments_hash),
   UNIQUE (tenant_id, command_id),
   FOREIGN KEY (tenant_id, object_id, caller_id, invocation_id)
     REFERENCES object_invocations(tenant_id, object_id, caller_id, id),
@@ -838,8 +842,12 @@ CREATE TABLE tool_executions (
   CHECK ((lease_owner IS NULL) = (lease_until IS NULL)),
   UNIQUE (tenant_id, command_id),
   UNIQUE (tenant_id, decision_id),
-  FOREIGN KEY (tenant_id, object_id, invocation_id, decision_id, decision)
-    REFERENCES policy_decisions(tenant_id, object_id, invocation_id, id, decision),
+  FOREIGN KEY (tenant_id, object_id, invocation_id, decision_id, decision,
+               command_id, caller_id, snapshot_id, tool_id, tool_version_id,
+               binding_version, operation, arguments_hash)
+    REFERENCES policy_decisions(tenant_id, object_id, invocation_id, id, decision,
+               command_id, caller_id, snapshot_id, tool_id, tool_version_id,
+               binding_version, operation, arguments_hash),
   FOREIGN KEY (tenant_id, command_id) REFERENCES policy_decisions(tenant_id, command_id),
   FOREIGN KEY (tenant_id, object_id, caller_id, invocation_id)
     REFERENCES object_invocations(tenant_id, object_id, caller_id, id),
@@ -871,7 +879,7 @@ CREATE TABLE events (
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, event_id),
   UNIQUE (event_id),
-  UNIQUE (tenant_id, aggregate_type, aggregate_id, stream_version)
+  CONSTRAINT events_stream_version_unique UNIQUE (tenant_id, aggregate_type, aggregate_id, stream_version)
 );
 
 -- Allocate stream_version atomically per aggregate. Concurrent writes to the
@@ -1137,9 +1145,11 @@ BEGIN
   END LOOP;
 END $$;
 
--- Fail the clean-schema migration closed if any tenant-owned table was
--- omitted from the RLS classification or lacks the runtime tenant policy.
-DO $rls_audit$
+-- Reusable catalog assertion: migrations call this before becoming usable,
+-- and regression tests deliberately create an unclassified tenant table to
+-- prove the guard aborts rather than silently accepting an incomplete policy set.
+CREATE FUNCTION assert_tenant_rls_classification() RETURNS void
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $rls_audit$
 DECLARE bad_tables TEXT;
 BEGIN
   SELECT string_agg(format('%I', c.relname), ', ' ORDER BY c.relname)
@@ -1161,6 +1171,8 @@ BEGIN
       USING ERRCODE = '55000';
   END IF;
 END $rls_audit$;
+REVOKE ALL ON FUNCTION assert_tenant_rls_classification() FROM PUBLIC;
+SELECT assert_tenant_rls_classification();
 
 -- These tables are excluded from the generic tenant-only policy loop because
 -- their runtime policy also depends on the parent memory's Caller visibility.
