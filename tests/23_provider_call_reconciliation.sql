@@ -41,6 +41,26 @@ SELECT tt.try('RUST-041d unknown outcome may reconcile to durable response', 'ok
    WHERE tenant_id=current_setting('app.tenant_id')::uuid
      AND invocation_id='1a000000-0000-0000-0000-000000000001'
 $q$);
+SELECT tt.try('RUST-041d settle response and release its reservation atomically', 'ok', $q$
+  UPDATE budget_reservations
+     SET status='Settled', actual_tokens=19, actual_cost_micros=0
+   WHERE tenant_id=current_setting('app.tenant_id')::uuid
+     AND invocation_id='1a000000-0000-0000-0000-000000000001'
+     AND status='Reserved';
+  UPDATE usage_counters
+     SET reserved_tokens=reserved_tokens-500,
+         reserved_cost_micros=reserved_cost_micros-500,
+         consumed_tokens=consumed_tokens+19
+   WHERE tenant_id=current_setting('app.tenant_id')::uuid
+     AND object_id='0b000000-0000-0000-0000-000000000001'
+     AND usage_date=current_date AND pool='authenticated';
+  UPDATE caller_usage_counters
+     SET reserved_tokens=reserved_tokens-500, consumed_tokens=consumed_tokens+19
+   WHERE tenant_id=current_setting('app.tenant_id')::uuid
+     AND object_id='0b000000-0000-0000-0000-000000000001'
+     AND caller_id='ca000000-0000-0000-0000-000000000001'
+     AND usage_date=current_date
+$q$);
 SELECT tt.try('RUST-041d persisted response usage is immutable', 'err', $q$
   UPDATE provider_call_attempts SET input_tokens=13
    WHERE tenant_id=current_setting('app.tenant_id')::uuid
