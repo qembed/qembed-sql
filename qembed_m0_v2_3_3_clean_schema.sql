@@ -1274,7 +1274,41 @@ CREATE POLICY admin_knowledge_revisions_ins ON knowledge_revisions FOR INSERT TO
 CREATE FUNCTION assert_tenant_rls_classification() RETURNS void
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $rls_audit$
 DECLARE bad_tables TEXT;
+        missing_tables TEXT;
 BEGIN
+  -- Positive allowlist: a new tenant-owned table cannot escape the audit by
+  -- omitting tenant_id entirely or by being left out of the generic RLS loop.
+  SELECT string_agg(expected.table_name, ', ' ORDER BY expected.table_name)
+    INTO missing_tables
+    FROM unnest(ARRAY[
+      'objects','object_versions','callers','principal_caller_delegations',
+      'snapshots','object_invocations','invocation_idempotency','interaction_messages',
+      'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
+      'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
+      'object_tools','policy_decisions','tool_command_payloads','tool_executions',
+      'event_stream_counters','events','outbox_messages','object_budgets',
+      'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters',
+      'budget_event_dedup','object_goals','object_tasks','deletion_jobs','deletion_ledger'
+    ]) AS expected(table_name)
+    LEFT JOIN pg_class c ON c.relname=expected.table_name
+      AND c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p')
+    LEFT JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      AND a.attnum>0 AND NOT a.attisdropped
+   WHERE c.oid IS NULL OR a.attnum IS NULL OR NOT a.attnotnull
+      OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+      OR NOT EXISTS (
+        SELECT 1 FROM pg_policy p
+         WHERE p.polrelid=c.oid AND p.polname='tenant_isolation'
+           AND p.polroles @> ARRAY[(SELECT oid FROM pg_roles WHERE rolname='qembed_runtime')]::oid[]
+           AND p.polcmd='*'
+      );
+  IF missing_tables IS NOT NULL THEN
+    RAISE EXCEPTION 'expected tenant-owned tables are missing tenant/RLS classification: %', missing_tables
+      USING ERRCODE = '55000';
+  END IF;
+
+  -- Negative allowlist: every additional table with tenant_id must be either
+  -- tenant-owned under the generic policy or an explicit reviewed exception.
   SELECT string_agg(format('%I', c.relname), ', ' ORDER BY c.relname)
     INTO bad_tables
     FROM pg_class c
