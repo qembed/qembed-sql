@@ -64,3 +64,28 @@ SELECT tt.try('exec ->Executing (lease)','ok',$q$UPDATE tool_executions SET stat
 SELECT tt.try('exec ->Succeeded w/ output','ok',$q$UPDATE tool_executions SET status='Succeeded',lease_owner=NULL,lease_until=NULL,finished_at=now(),output='{"r":1}',output_expires_at=now()-interval '1 hour' WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
 SELECT tt.try('exec terminal immutable','err',$q$UPDATE tool_executions SET operation='z' WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
 RESET ROLE;
+
+-- RUST-046 / T-04 + T-21: provenance claims must be rejected by PostgreSQL,
+-- not merely by the application path. These are deliberately direct INSERTs.
+SELECT tt.try('T-04 User cannot claim Verified','err',$q$INSERT INTO memories(id,tenant_id,object_id,memory_kind,claim,source_kind,verification,confidence,verified_by,verified_at)
+ VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','semantic','user verified','User','Verified',1,'22222222-0000-0000-0000-00000000000a',now())$q$);
+SELECT tt.try('T-04 ThirdParty cannot claim Observed','err',$q$INSERT INTO memories(id,tenant_id,object_id,memory_kind,claim,source_kind,verification,confidence)
+ VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','semantic','third-party observed','ThirdParty','Observed',0.8)$q$);
+SELECT tt.try('T-04 RuntimeInference cannot claim Verified','err',$q$INSERT INTO memories(id,tenant_id,object_id,memory_kind,claim,source_kind,verification,confidence,verified_by,verified_at)
+ VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','semantic','inferred verified','RuntimeInference','Verified',1,'22222222-0000-0000-0000-00000000000a',now())$q$);
+SELECT tt.try('T-21 TrustedDocument cannot create Verified without Owner promotion row','err',$q$INSERT INTO memories(id,tenant_id,object_id,memory_kind,claim,source_kind,verification,confidence,supersedes_id,verified_by,verified_at)
+ VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','semantic','trusted document verified','TrustedDocument','Verified',1,'de000000-0000-0000-0000-000000000002','22222222-0000-0000-0000-00000000000a',now())$q$);
+SELECT tt.try('T-21 User Observed is invalid','err',$q$INSERT INTO memories(id,tenant_id,object_id,memory_kind,claim,source_kind,verification,confidence)
+ VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','semantic','user observed','User','Observed',0.5)$q$);
+SELECT tt.try('T-21 Tool Observed is valid','ok',$q$INSERT INTO memories(id,tenant_id,object_id,memory_kind,claim,source_kind,verification,confidence)
+ VALUES ('de000000-0000-0000-0000-000000000003',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','semantic','tool observed','Tool','Observed',0.9)$q$);
+
+-- T-27 acceptance requires caller-level isolation in addition to tenant RLS.
+-- The current clean schema installs tenant_id-only policies. Record the actual
+-- DB behavior explicitly: both caller rows remain visible inside one tenant.
+SELECT tt.try('T-27 fixture Caller B episodic memory','ok',$q$INSERT INTO memories(id,tenant_id,object_id,caller_id,memory_kind,claim,source_kind,verification,confidence,expires_at)
+ VALUES ('de000000-0000-0000-0000-000000000004',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000002','episodic','caller B memory','User','Unverified',0.5,now()+interval '1 day')$q$);
+SELECT tt.chk('T-27 KNOWN GAP: tenant-scoped runtime sees Caller B memory (caller RLS absent)',
+ $q$SELECT count(*)=1 FROM memories
+     WHERE id='de000000-0000-0000-0000-000000000004'
+       AND caller_id='ca000000-0000-0000-0000-000000000002'$q$);
