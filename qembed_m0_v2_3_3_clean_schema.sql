@@ -54,6 +54,7 @@ GRANT USAGE ON SCHEMA public TO qembed_event_allocator;
 -- Application and PUBLIC roles must never be able to shadow objects there.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer, qembed_event_allocator;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM qembed_event_allocator;
 
 -- -----------------------------------------------------------------------------
 -- 1. Guards
