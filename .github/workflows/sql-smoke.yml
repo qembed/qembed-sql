@@ -2,6 +2,7 @@ name: SQL PostgreSQL smoke
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches: [master]
   push:
     branches: [master]
@@ -9,26 +10,27 @@ on:
 jobs:
   postgres-smoke:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:0.8.7-pg16-bookworm
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
+      - name: Start PostgreSQL 16 with pgvector
+        run: |
+          docker run --detach --name qembed-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_PASSWORD=postgres \
+            pgvector/pgvector:0.8.7-pg16-bookworm
+          for attempt in $(seq 1 60); do
+            if docker exec qembed-postgres pg_isready -U postgres -d postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs qembed-postgres
+          exit 1
       - name: Create schema owner
         env:
           PGHOST: 127.0.0.1
