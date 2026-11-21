@@ -22,7 +22,7 @@
 
 ## Validation status
 - r3 baseline: PostgreSQL 16 + pgvector 0.8.0, smoke-набор 103/103 (r1 на том же наборе: 12 падений).
-- r4 current master: PostgreSQL 19 + pgvector 0.8.7 smoke suite passed 421/421 after QSA-010 remediation. Это результат smoke suite, а не подтверждение прохождения всех T-01…T-64 acceptance-пунктов.
+- r4 current master: PostgreSQL 19 + pgvector 0.8.7 smoke suite passed 428/428 after QSA-017 cross-tenant UUID collision probes. Это результат smoke suite, а не подтверждение прохождения всех T-01…T-64 acceptance-пунктов.
 - Not yet validated: полный T-01…T-64 acceptance, multi-session concurrency/fencing, Rust JCS, SSRF, failure-injection и upgrade. PostgreSQL 15/16 не являются текущей целевой CI-конфигурацией. Заявления о production-готовности нет.
 - **B-01…B-09:** список замечаний и отчёт r2 в присланный архив не входили; r3 не утверждает закрытие B-01…B-09 и не сопоставляет с ними R3-01…R3-06. Пришлите список — сверю.
 
