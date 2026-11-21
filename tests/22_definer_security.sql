@@ -208,6 +208,9 @@ SELECT tt.chk('QSA-001 runtime has only tenant-scoped operational definer entry 
        AND has_function_privilege('qembed_runtime','public.resolve_delegated_caller(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.resolve_object_tenant(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.sweep_stale_invocation_deliveries(timestamp with time zone,integer)','EXECUTE')
+       AND NOT has_function_privilege('qembed_runtime','public.list_expired_invocation_leases(integer)','EXECUTE')
+       AND NOT has_function_privilege('qembed_runtime','public.list_pending_reconciliations(integer)','EXECUTE')
+       AND NOT has_function_privilege('qembed_runtime','public.sweep_expired_reservations(integer)','EXECUTE')
        AND NOT has_function_privilege('qembed_runtime','public.retention_purge(text,timestamptz,text)','EXECUTE')$q$);
 SELECT tt.chk('AUDIT-010 retention has only the purge entry point',
   $q$SELECT has_function_privilege('qembed_retention','public.retention_purge(text,timestamptz,text)','EXECUTE')
