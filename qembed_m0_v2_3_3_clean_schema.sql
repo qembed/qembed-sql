@@ -667,6 +667,8 @@ CREATE TABLE knowledge_chunks (
     REFERENCES knowledge_documents(tenant_id, object_id, id) ON DELETE CASCADE
 );
 CREATE INDEX idx_chunks_visible ON knowledge_chunks (tenant_id, object_id, valid_from_revision, valid_to_revision);
+-- Supports document revision synchronization and ON DELETE CASCADE from knowledge_documents.
+CREATE INDEX idx_chunks_document ON knowledge_chunks (tenant_id, object_id, document_id);
 CREATE INDEX idx_chunks_fts ON knowledge_chunks USING gin (content_tsv);
 
 CREATE FUNCTION knowledge_chunks_guard() RETURNS trigger LANGUAGE plpgsql AS $$
