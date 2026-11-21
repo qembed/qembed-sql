@@ -30,6 +30,9 @@ This roadmap supersedes the ordinary SQL feature backlog while any P0 item is op
 - `REVALIDATE` — reported by the audit; must be checked against current `master`.
 - `SOURCE_CONFIRMED` — current source/catalog assertions still expose the reported path; a current-base live database reproduction is pending.
 - `CONFIRMED` — reproduced against the current baseline database, with evidence recorded below.
+- `NOT_REPRODUCED` — current DDL/behavior already enforces the reported invariant; regression evidence is recorded.
+- `DEFERRED_TO_FUTURE_FEATURE` — the schema contract is explicitly future-facing and no current runtime path claims support.
+- `DEFERRED_TO_RUST` — the SQL concern is governed by an accepted Rust/application contract and requires its application-level tests.
 - `IN_PROGRESS` — remediation PR is open.
 - `BLOCKED` — requires a documented decision or external dependency.
 - `VERIFIED` — regression test and target-environment evidence pass on merged code.
@@ -197,7 +200,7 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-008 — Reconcile verified-memory principal foreign keys with the Rust auth model
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `SOURCE_CONFIRMED` — current schema's verified-memory guard and foreign key reference `principals`, while the Rust authentication path writes `owner_principals`. This remains a cross-repository contract question; no DDL change is made until the intended Principal relation is confirmed.
+**Current status:** `DEFERRED_TO_FUTURE_FEATURE` — the schema comment above `owner_principals` explicitly states that `principals`/`callers` are the future model and are not used by the current Rust auth path. The current Rust repository has no memory write adapter. This is not a demonstrated current-path failure; it must be reconciled before Verified memory is enabled through Rust.
 
 - [ ] Trace `memories_verified_guard`, its FK targets, and every Rust/SQL write path for Principal identity.
 - [ ] Determine whether `principals` and `owner_principals` intentionally represent distinct identities or whether this is a broken integration.
@@ -209,12 +212,11 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-009 — Require a lease for Executing ToolExecution rows
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `REVALIDATE`
+**Current status:** `NOT_REPRODUCED` — current DDL already enforces the invariant through combined checks: `(status = 'Executing') = (lease_owner IS NOT NULL)` and `(lease_owner IS NULL) = (lease_until IS NULL)`. Together they imply `Executing => lease_until IS NOT NULL`. A direct runtime transition test is added in [PR #38](https://github.com/qembed/qembed-sql/pull/38).
 
-- [ ] Inspect the current ToolExecution status/lease CHECK constraints and all transition functions.
-- [ ] Require `lease_until IS NOT NULL` whenever status is `Executing`, unless a documented state transition proves otherwise.
-- [ ] Verify that pending reconciliation discovery cannot miss an Executing row because its lease is NULL.
-- [ ] Add insert/update negative tests and lifecycle regression coverage.
+- [x] Inspect the current ToolExecution status/lease CHECK constraints and transition guard.
+- [x] Add a negative transition test proving an Executing row cannot omit `lease_until`.
+- [ ] Verify reconciliation discovery against the same constraint in an end-to-end worker test.
 
 **Acceptance:** an Executing row is always discoverable by the lease/reconciliation logic and cannot exist in an unleased ambiguous state.
 
@@ -246,7 +248,7 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-012 — Decide whether snapshots.content_hash is database-verified
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `REVALIDATE` / architecture decision required
+**Current status:** `DEFERRED_TO_RUST` / architecture decision required — accepted ADR RUST-044 treats SHA-256 as a lookup discriminator and requires exact canonical-byte comparison at the Rust deduplication boundary; it does not mandate a database digest-equality CHECK. Read-time detection of corrupted persisted hashes remains a Rust acceptance requirement to verify.
 
 - [ ] Re-read `ADR_RUST-044_Identical_Content_Version_Deduplication.md` and the current Rust snapshot write/read contract.
 - [ ] Determine whether the database must enforce `content_hash = SHA-256(canonical_json)` or whether Rust read-time verification is the approved boundary.
@@ -329,11 +331,11 @@ Every remediation PR must include:
 | QSA-005 | PR #31; 404/404 PR-head and post-merge | [PR #31](https://github.com/qembed/qembed-sql/pull/31) | 404/404 | VERIFIED |
 | QSA-006 | PR #35; 416/416 PR-head and post-merge | [PR #35](https://github.com/qembed/qembed-sql/pull/35) | 416/416 | VERIFIED |
 | QSA-007 | PR #30; 400/400 PR-head and post-merge | [PR #30](https://github.com/qembed/qembed-sql/pull/30) | 400/400 | VERIFIED |
-| QSA-008 | Source-confirmed: verified-memory FK targets `principals` | — | Pending | SOURCE_CONFIRMED |
-| QSA-009 | Pending | — | Pending | REVALIDATE |
+| QSA-008 | Future principal/memory model; no current Rust memory write adapter | — | N/A | DEFERRED_TO_FUTURE_FEATURE |
+| QSA-009 | Combined CHECK constraints imply Executing has lease_until; negative test in PR #38 | [PR #38](https://github.com/qembed/qembed-sql/pull/38) | Pending | NOT_REPRODUCED |
 | QSA-010 | Pending | — | Pending | REVALIDATE |
 | QSA-011 | PR #36; 418/418 PR-head and post-merge | [PR #36](https://github.com/qembed/qembed-sql/pull/36) | 418/418 | VERIFIED |
-| QSA-012 | Pending | — | Pending | REVALIDATE |
+| QSA-012 | ADR RUST-044 assigns exact-byte dedup check to Rust; read-time corruption test pending | — | Pending | DEFERRED_TO_RUST |
 | QSA-013–018 | Pending | — | Pending | REVALIDATE |
 | QSA-019–023 | Pending | — | Pending | REVALIDATE |
 
