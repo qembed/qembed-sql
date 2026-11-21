@@ -77,6 +77,16 @@ RESET ROLE;
 -- retention may purge delivered rows, but must preserve pending deliveries
 SET ROLE qembed_retention;
 SELECT tt.try('AUDIT-005 retention purges delivered outbox rows','ok',$q$SELECT retention_purge('outbox_messages',now(),'ttl')$q$);
+DO $receipt_history$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM outbox_publication_receipts
+     WHERE tenant_id = current_setting('app.tenant_id')::uuid
+  ) THEN
+    RAISE EXCEPTION 'PubAck history was deleted with retained Outbox rows';
+  END IF;
+END
+$receipt_history$;
 RESET ROLE;
 SELECT tt.chk('AUDIT-005 retention preserves pending outbox rows', $q$SELECT count(*)=1 AND bool_and(delivered_at IS NULL) FROM outbox_messages WHERE tenant_id=current_setting('app.tenant_id')::uuid$q$);
 -- RLS audit & role attrs

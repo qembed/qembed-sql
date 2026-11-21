@@ -937,6 +937,9 @@ CREATE TABLE outbox_messages (
   payload JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   delivered_at TIMESTAMPTZ,
+  publication_stream TEXT,
+  publication_sequence BIGINT,
+  publication_duplicate BOOLEAN,
   lease_owner TEXT,
   lease_expires_at TIMESTAMPTZ,
   claim_token BIGINT NOT NULL DEFAULT 0 CHECK (claim_token >= 0),
@@ -944,6 +947,12 @@ CREATE TABLE outbox_messages (
   PRIMARY KEY (tenant_id, delivery_id),
   CONSTRAINT outbox_lease_pair CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
   CONSTRAINT outbox_delivered_unleased CHECK (delivered_at IS NULL OR lease_owner IS NULL),
+  CONSTRAINT outbox_publication_receipt_consistent CHECK (
+    (publication_stream IS NULL AND publication_sequence IS NULL AND publication_duplicate IS NULL)
+    OR
+    (publication_stream IS NOT NULL AND publication_stream <> '' AND publication_sequence IS NOT NULL
+      AND publication_sequence > 0 AND publication_duplicate IS NOT NULL AND delivered_at IS NOT NULL)
+  ),
   UNIQUE (tenant_id, event_id),
   FOREIGN KEY (tenant_id, event_id)
     REFERENCES events (tenant_id, event_id)
@@ -952,6 +961,34 @@ CREATE TABLE outbox_messages (
 CREATE INDEX outbox_pending_idx
   ON outbox_messages (created_at, delivery_id)
   WHERE delivered_at IS NULL;
+
+-- Append-only history of durable transport acknowledgements. The Outbox row
+-- remains the source of truth; this ledger preserves every PubAck across replay.
+CREATE TABLE outbox_publication_receipts (
+  receipt_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL,
+  delivery_id UUID NOT NULL,
+  publication_stream TEXT NOT NULL CHECK (publication_stream <> ''),
+  publication_sequence BIGINT NOT NULL CHECK (publication_sequence > 0),
+  publication_duplicate BOOLEAN NOT NULL,
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Deliberately no FK to outbox_messages: retention may prune delivered Outbox
+-- rows, while this immutable audit history must survive independently.
+CREATE INDEX outbox_publication_receipts_delivery_idx
+  ON outbox_publication_receipts (tenant_id, delivery_id, published_at, receipt_id);
+CREATE FUNCTION reject_outbox_publication_receipt_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $receipt_immutable$
+BEGIN
+  RAISE EXCEPTION 'outbox_publication_receipts is append-only'
+    USING ERRCODE = '55000';
+END
+$receipt_immutable$;
+CREATE TRIGGER outbox_publication_receipts_append_only
+  BEFORE UPDATE OR DELETE ON outbox_publication_receipts
+  FOR EACH ROW EXECUTE FUNCTION reject_outbox_publication_receipt_mutation();
+COMMENT ON TABLE outbox_publication_receipts IS
+  'Append-only history of transport PubAck receipts; never a business completion ledger';
 
 -- -----------------------------------------------------------------------------
 -- 12. Budgets, usage, rate limits, kill switches
@@ -1273,6 +1310,14 @@ CREATE POLICY ks_admin ON kill_switches TO qembed_admin USING (true) WITH CHECK 
 -- dispatcher: cross-tenant delivery projection only. It must not read
 -- the append-only domain event log or event identity columns.
 CREATE POLICY disp_outbox ON outbox_messages TO qembed_dispatcher USING (true) WITH CHECK (true);
+ALTER TABLE outbox_publication_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE outbox_publication_receipts FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON outbox_publication_receipts
+  FOR ALL TO qembed_runtime
+  USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY disp_outbox_receipts ON outbox_publication_receipts
+  FOR INSERT TO qembed_dispatcher WITH CHECK (true);
 
 -- definer role (owner of SECURITY DEFINER functions): only the tables their bodies touch
 DO $$
@@ -1311,7 +1356,7 @@ BEGIN
       'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
       'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
       'object_tools','policy_decisions','tool_command_payloads','tool_executions',
-      'event_stream_counters','events','outbox_messages','object_budgets',
+      'event_stream_counters','events','outbox_messages','outbox_publication_receipts','object_budgets',
       'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters',
       'budget_event_dedup','object_goals','object_tasks','deletion_jobs','deletion_ledger'
     ]) AS expected(table_name)
@@ -1369,7 +1414,7 @@ BEGIN
        'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
        'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
        'object_tools','policy_decisions','tool_command_payloads','tool_executions',
-       'event_stream_counters','events','outbox_messages','object_budgets',
+       'event_stream_counters','events','outbox_messages','outbox_publication_receipts','object_budgets',
        'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters',
        'budget_event_dedup','rate_limit_buckets','kill_switches','object_goals',
        'object_tasks','deletion_jobs','deletion_ledger','retention_log'
@@ -1650,11 +1695,15 @@ REVOKE SELECT ON events FROM qembed_dispatcher;
 REVOKE SELECT ON outbox_messages FROM qembed_dispatcher;
 GRANT SELECT (
   tenant_id, delivery_id, topic, payload, created_at, delivered_at,
+  publication_stream, publication_sequence, publication_duplicate,
   lease_owner, lease_expires_at, claim_token, attempts
 ) ON outbox_messages TO qembed_dispatcher;
 GRANT UPDATE (
-  delivered_at, lease_owner, lease_expires_at, claim_token, attempts
+  delivered_at, publication_stream, publication_sequence, publication_duplicate,
+  lease_owner, lease_expires_at, claim_token, attempts
 ) ON outbox_messages TO qembed_dispatcher;
+REVOKE ALL PRIVILEGES ON outbox_publication_receipts FROM PUBLIC, qembed_runtime, qembed_dispatcher;
+GRANT INSERT ON outbox_publication_receipts TO qembed_dispatcher;
 
 -- admin
 GRANT SELECT, INSERT, UPDATE ON tenants, principals, kill_switches, objects,

@@ -92,7 +92,7 @@ Rust-репозиторий — неизменяемый источник кон
 ### AUDIT-005: events and outbox
 - `events` and `outbox_messages` now use the exact Rust migration columns, defaults, primary/unique keys and tenant-consistent outbox FK.
 - Event ordering uses `events_aggregate_order_idx`; events reject UPDATE/DELETE with SQLSTATE `55000`.
-- Outbox delivery state uses nullable `delivered_at` plus dispatcher lease owner/expiry, monotonic `claim_token`, and `attempts`. Claims are fenced and reclaimable; the dispatcher can read only the delivery projection and cannot read `events` or `event_id`.
+- Outbox delivery state uses nullable `delivered_at` plus dispatcher lease owner/expiry, monotonic `claim_token`, and `attempts`. After JetStream PubAck, the dispatcher persists a complete latest-publication receipt (`publication_stream`, `publication_sequence`, `publication_duplicate`) atomically with `delivered_at`; a CHECK constraint rejects partial receipts. Every acknowledged publication is also appended to the immutable `outbox_publication_receipts` ledger so recovery replays never erase prior PubAck history. The dispatcher can read only the delivery projection and cannot read `events` or `event_id`.
 - The pending index is `(created_at, delivery_id) WHERE delivered_at IS NULL`. Retention removes only delivered rows older than the cutoff; undelivered messages are retained.
 - Regression coverage is in `tests/16_events_outbox.sql`; the Rust physical contract assertions and smoke runner include AUDIT-005.
 
