@@ -31,6 +31,21 @@ SELECT tt.try('doc staged','ok',$q$INSERT INTO knowledge_documents(id,tenant_id,
 SELECT tt.try('chunk staged','ok',$q$INSERT INTO knowledge_chunks(id,tenant_id,object_id,document_id,content,position) VALUES ('c4000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','d0c00000-0000-0000-0000-000000000001','hello',0)$q$);
 SELECT tt.try('chunk invented interval denied','err',$q$INSERT INTO knowledge_chunks(id,tenant_id,object_id,document_id,content,position,valid_from_revision) VALUES (gen_random_uuid(),current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','d0c00000-0000-0000-0000-000000000001','x',1,5)$q$);
 SELECT tt.try('embedding dim ok','ok',$q$INSERT INTO knowledge_chunk_embeddings(tenant_id,object_id,chunk_id,model_id,embedding) VALUES (current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','c4000000-0000-0000-0000-000000000001','m3','[1,2,3]')$q$);
+-- QSA-004: only the SECURITY DEFINER document-sync trigger may change chunk intervals.
+SELECT tt.try('QSA-004 live document revision syncs chunk intervals through definer','ok',
+ $q$UPDATE knowledge_documents
+       SET status='live', valid_from_revision=1
+     WHERE id='d0c00000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('QSA-004 trusted document sync installed the chunk interval',
+ $q$SELECT valid_from_revision=1 AND valid_to_revision IS NULL
+      FROM knowledge_chunks WHERE id='c4000000-0000-0000-0000-000000000001'$q$);
+SELECT set_config('qembed.interval_sync','on',false);
+SELECT tt.try('QSA-004 runtime cannot forge interval-sync authority with a GUC','err',
+ $q$UPDATE knowledge_chunks SET valid_to_revision=2
+      WHERE id='c4000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('QSA-004 forged GUC did not alter the chunk interval',
+ $q$SELECT valid_from_revision=1 AND valid_to_revision IS NULL
+      FROM knowledge_chunks WHERE id='c4000000-0000-0000-0000-000000000001'$q$);
 SELECT tt.try('T-28 embedding dim mismatch','err',$q$UPDATE knowledge_chunk_embeddings SET embedding='[1,2]'$q$);
 SELECT tt.try('revision commit rev1','ok',$q$
   UPDATE knowledge_revisions SET current_revision=1 WHERE object_id='0b000000-0000-0000-0000-000000000001';
