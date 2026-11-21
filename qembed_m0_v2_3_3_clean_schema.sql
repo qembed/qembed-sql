@@ -942,8 +942,8 @@ CREATE TABLE outbox_messages (
   claim_token BIGINT NOT NULL DEFAULT 0 CHECK (claim_token >= 0),
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   PRIMARY KEY (tenant_id, delivery_id),
-  CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
-  CHECK (delivered_at IS NULL OR lease_owner IS NULL),
+  CONSTRAINT outbox_lease_pair CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
+  CONSTRAINT outbox_delivered_unleased CHECK (delivered_at IS NULL OR lease_owner IS NULL),
   UNIQUE (tenant_id, event_id),
   FOREIGN KEY (tenant_id, event_id)
     REFERENCES events (tenant_id, event_id)
