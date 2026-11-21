@@ -28,7 +28,8 @@ This roadmap supersedes the ordinary SQL feature backlog while any P0 item is op
 ### Status vocabulary
 
 - `REVALIDATE` — reported by the audit; must be checked against current `master`.
-- `CONFIRMED` — reproduced on current baseline, with evidence recorded below.
+- `SOURCE_CONFIRMED` — current source/catalog assertions still expose the reported path; a current-base live database reproduction is pending.
+- `CONFIRMED` — reproduced against the current baseline database, with evidence recorded below.
 - `IN_PROGRESS` — remediation PR is open.
 - `BLOCKED` — requires a documented decision or external dependency.
 - `VERIFIED` — regression test and target-environment evidence pass on merged code.
@@ -44,7 +45,9 @@ These items are the first execution wave. The audit classified the original obse
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `REVALIDATE`
+**Current status:** `SOURCE_CONFIRMED` — current schema grants all three reported cross-tenant worker entry points to `qembed_runtime`; no `qembed_worker` role is provisioned. The current-base live test remains pending.
+
+**Current-source evidence:** role provisioning at the top of `qembed_m0_v2_3_3_clean_schema.sql` does not include `qembed_worker`; the runtime EXECUTE grant includes `list_expired_invocation_leases`, `list_pending_reconciliations`, and `sweep_expired_reservations`. `tests/22_definer_security.sql` currently asserts runtime EXECUTE access to these functions.
 
 **Reported behavior:** the tenant-facing `qembed_runtime` role could execute cross-tenant discovery functions, including:
 - `list_expired_invocation_leases`
@@ -68,7 +71,9 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `REVALIDATE`
+**Current status:** `IN_PROGRESS` — confirmed in current source; remediation is PR [#28](https://github.com/qembed/qembed-sql/pull/28). The first PR-head CI run exposed a stale T-57 expectation; it is corrected and the latest head is awaiting PostgreSQL 19 / pgvector 0.8.7 validation.
+
+**Current-source evidence:** `assign_event_stream_version()` lacked `pg_temp` in its function-level search_path; `check_embedding_dim()` and `object_published_pointer_guard()` had no pinned search_path. Existing catalog assertions did not cover all three attack paths.
 
 **Reported behavior:** `assign_event_stream_version` lacked `pg_temp` in its pinned `search_path`. A caller-created temporary relation could shadow a trusted relation and influence the function. The audit also reported exploit paths affecting `check_embedding_dim` and `object_published_pointer_guard`.
 
@@ -87,7 +92,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `REVALIDATE` / architecture decision required
+**Current status:** `SOURCE_CONFIRMED` / architecture decision required — current schema comments explicitly state that RLS GUC context assumes application-internal SQL execution; live current-base revalidation remains pending.
 
 **Reported behavior:** `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session settings writable by the runtime role. Under arbitrary SQL execution as `qembed_runtime`, a caller can forge context and bypass the intended delegation boundary, including episodic-memory isolation.
 
@@ -105,7 +110,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `REVALIDATE`
+**Current status:** `SOURCE_CONFIRMED` — current schema still authorizes runtime UPDATE on `knowledge_chunks` and uses caller-settable `qembed.interval_sync` as the guard bypass; current-base live test remains pending.
 
 **Reported behavior:** a runtime role with UPDATE on `knowledge_chunks` could set `qembed.interval_sync = 'on'` and modify validity intervals directly, bypassing the intended document-revision synchronization guard.
 
@@ -122,7 +127,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `REVALIDATE`
+**Current status:** `SOURCE_CONFIRMED` — current `callers` table has no final-revocation trigger, while `qembed_runtime` retains table-level UPDATE. Current-base live test remains pending.
 
 **Reported behavior:** unlike owner credentials and delegation records, a Caller revocation could be reversed by setting `callers.revoked_at` back to NULL.
 
@@ -139,7 +144,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `REVALIDATE` / policy decision required
+**Current status:** `SOURCE_CONFIRMED` / policy decision required — current `ks_write` policy is `FOR ALL` for the current tenant, and runtime has DELETE privilege. Existing T-50 coverage only exercises the platform-global (`tenant_id IS NULL`) row, not a tenant-scoped switch.
 
 **Reported behavior:** policy `ks_write` appeared to allow the runtime role to delete a tenant's kill-switch row, while the `T-50` check constrained only the `platform` value.
 
@@ -156,7 +161,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `REVALIDATE`
+**Current status:** `SOURCE_CONFIRMED` — current `retention_purge('outbox_messages')` predicate checks delivery and age but does not exclude `replay_requested_at IS NOT NULL`; current-base live test remains pending.
 
 **Reported behavior:** `retention_purge('outbox_messages')` could delete rows that still had `replay_requested_at`, losing pending replay work.
 
@@ -303,13 +308,13 @@ Every remediation PR must include:
 
 | QSA | Baseline revalidation | PR / commit | PG19 + pgvector 0.8.7 | Status |
 |---|---|---|---|---|
-| QSA-001 | Pending | — | Pending | REVALIDATE |
-| QSA-002 | Pending | — | Pending | REVALIDATE |
-| QSA-003 | Pending | — | Pending | REVALIDATE |
-| QSA-004 | Pending | — | Pending | REVALIDATE |
-| QSA-005 | Pending | — | Pending | REVALIDATE |
-| QSA-006 | Pending | — | Pending | REVALIDATE |
-| QSA-007 | Pending | — | Pending | REVALIDATE |
+| QSA-001 | Source-confirmed: runtime EXECUTE grants remain | — | Pending | SOURCE_CONFIRMED |
+| QSA-002 | Source-confirmed; live test in PR #28 | [PR #28](https://github.com/qembed/qembed-sql/pull/28) | Pending | IN_PROGRESS |
+| QSA-003 | Source-confirmed: GUC trust boundary documented in schema | — | Pending | SOURCE_CONFIRMED |
+| QSA-004 | Source-confirmed: caller-settable bypass remains | — | Pending | SOURCE_CONFIRMED |
+| QSA-005 | Source-confirmed: no Caller final-revocation guard | — | Pending | SOURCE_CONFIRMED |
+| QSA-006 | Source-confirmed: tenant-scoped FOR ALL policy + DELETE grant | — | Pending | SOURCE_CONFIRMED |
+| QSA-007 | Source-confirmed: replay marker absent from purge predicate | — | Pending | SOURCE_CONFIRMED |
 | QSA-008 | Pending | — | Pending | REVALIDATE |
 | QSA-009 | Pending | — | Pending | REVALIDATE |
 | QSA-010 | Pending | — | Pending | REVALIDATE |
