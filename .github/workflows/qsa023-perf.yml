@@ -1,0 +1,65 @@
+name: QSA-023 event index benchmark
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "qembed_m0_v2_3_3_clean_schema.sql"
+      - "tests/performance/qsa023_event_index.sql"
+      - ".github/workflows/qsa023-perf.yml"
+  push:
+    branches: [master]
+    paths:
+      - "qembed_m0_v2_3_3_clean_schema.sql"
+      - "tests/performance/qsa023_event_index.sql"
+      - ".github/workflows/qsa023-perf.yml"
+
+jobs:
+  qsa023-benchmark:
+    name: PostgreSQL 19 / pgvector 0.8.7 events benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+      - name: Start PostgreSQL 19 with pgvector
+        run: |
+          docker run --detach --name qembed-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_PASSWORD=postgres \
+            pgvector/pgvector:0.8.7-pg19-bookworm
+          for attempt in $(seq 1 60); do
+            if docker exec qembed-postgres pg_isready -U postgres -d postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs qembed-postgres
+          exit 1
+      - name: Create schema owner
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: |
+          psql -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE qembed_migrator LOGIN SUPERUSER PASSWORD 'migrator'"
+      - name: Install schema and seed functional fixtures
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: qembed_migrator
+          PGPASSWORD: migrator
+          DB: qembed_smoke
+        run: bash tests/run_smoke.sh
+      - name: Measure duplicate event ordering index
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: qembed_migrator
+          PGPASSWORD: migrator
+        run: psql -X -v ON_ERROR_STOP=1 -d qembed_smoke -f tests/performance/qsa023_event_index.sql
