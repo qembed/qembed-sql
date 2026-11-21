@@ -198,7 +198,7 @@ SELECT tt.chk('QSA-002 embedding and published-pointer trigger guards pin pg_tem
           FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='object_published_pointer_guard')$q$);
 
 SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PUBLIC-executable',
-  $q$SELECT count(*)=9 AND bool_and(
+  $q$SELECT count(*)=11 AND bool_and(
        pg_get_userbyid(proowner)='qembed_definer'
        AND prosecdef
        AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
@@ -207,7 +207,8 @@ SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PU
        WHERE pronamespace='public'::regnamespace
          AND proname IN ('authenticate_principal','grant_caller_delegation','revoke_caller_delegation','resolve_delegated_caller','resolve_object_tenant',
                          'list_expired_invocation_leases','list_pending_reconciliations',
-                         'sweep_expired_reservations','retention_purge')$q$);
+                         'sweep_expired_reservations','retention_purge',
+                         'sweep_stale_invocation_deliveries','knowledge_documents_sync')$q$);
 
 SELECT tt.chk('QSA-001 runtime has only tenant-scoped operational definer entry points',
   $q$SELECT
