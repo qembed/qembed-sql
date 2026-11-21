@@ -50,6 +50,18 @@ SELECT tt.chk('RUST-051b dispatcher may read and write publication receipt only 
    AND NOT has_column_privilege('qembed_dispatcher','public.outbox_messages','event_id','SELECT')
    AND NOT has_table_privilege('qembed_dispatcher','public.events','SELECT')$q$);
 
+SELECT tt.chk('RUST-051b append-only publication receipt ledger exists',
+ $q$SELECT
+   to_regclass('public.outbox_publication_receipts') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM pg_class WHERE oid='public.outbox_publication_receipts'::regclass AND relrowsecurity AND relforcerowsecurity)
+   AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.outbox_publication_receipts'::regclass AND tgname='outbox_publication_receipts_append_only' AND NOT tgisinternal)$q$);
+SELECT tt.chk('RUST-051b dispatcher can append but cannot inspect or mutate receipt history',
+ $q$SELECT
+   has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','INSERT')
+   AND NOT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','SELECT')
+   AND NOT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','UPDATE')
+   AND NOT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','DELETE')$q$);
+
 SELECT tt.chk('AUDIT-005 pending outbox index matches delivered_at predicate',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
    AND indexname='outbox_pending_idx'
@@ -104,6 +116,17 @@ BEGIN
     SET delivered_at=now(), publication_stream='QEMBED_EVENTS',
         publication_sequence=1, publication_duplicate=false
     WHERE tenant_id=tid AND delivery_id=did;
+  INSERT INTO outbox_publication_receipts
+    (tenant_id, delivery_id, publication_stream, publication_sequence, publication_duplicate)
+  VALUES (tid, did, 'QEMBED_EVENTS', 1, false);
+
+  BEGIN
+    UPDATE outbox_publication_receipts SET publication_duplicate=true
+      WHERE tenant_id=tid AND delivery_id=did;
+    INSERT INTO tt.res VALUES ('RUST-051b PubAck history is immutable','55000','accepted',false,'receipt update unexpectedly accepted');
+  EXCEPTION WHEN SQLSTATE '55000' THEN
+    INSERT INTO tt.res VALUES ('RUST-051b PubAck history is immutable','55000','55000',true,'');
+  END;
   BEGIN
     UPDATE outbox_messages
       SET delivered_at=now(), publication_stream='QEMBED_EVENTS',
