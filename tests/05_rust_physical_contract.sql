@@ -201,3 +201,22 @@ SELECT tt.chk('QSA-022 outbox invocation recovery index has the expected express
        AND position('delivered_at IS NOT NULL' in pg_get_expr(i.indpred,i.indrelid)) > 0
        AND position('replay_requested_at IS NULL' in pg_get_expr(i.indpred,i.indrelid)) > 0
  )$q$);
+
+
+-- QSA-023: retain the unique aggregate-order index; remove the duplicate non-unique copy.
+SELECT tt.chk('QSA-023 unique event order index remains without duplicate index',
+ $q$SELECT
+   NOT EXISTS (
+     SELECT 1 FROM pg_class idx
+     JOIN pg_index i ON i.indexrelid=idx.oid
+     WHERE idx.relname='events_aggregate_order_idx'
+       AND i.indrelid='public.events'::regclass
+   )
+   AND EXISTS (
+     SELECT 1 FROM pg_class idx
+     JOIN pg_index i ON i.indexrelid=idx.oid
+     WHERE idx.relname='events_stream_version_unique'
+       AND i.indrelid='public.events'::regclass
+       AND i.indisunique AND i.indisvalid AND i.indisready
+       AND pg_get_indexdef(i.indexrelid) LIKE '%(tenant_id, aggregate_type, aggregate_id, stream_version)%'
+   )$q$);
