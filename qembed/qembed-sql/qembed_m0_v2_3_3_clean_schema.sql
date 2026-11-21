@@ -832,8 +832,9 @@ CREATE TABLE tool_executions (
   snapshot_id UUID NOT NULL, binding_version BIGINT NOT NULL, operation TEXT NOT NULL,
   arguments_hash BYTEA NOT NULL CHECK (octet_length(arguments_hash) = 32),
   status TEXT NOT NULL CHECK (status IN ('Authorized','Executing','Succeeded','Failed','Unknown')),
-  lease_owner TEXT, lease_until TIMESTAMPTZ,
+  lease_owner TEXT, lease_until TIMESTAMPTZ, heartbeat_at TIMESTAMPTZ,
   fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
+  version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
   external_idempotency_key TEXT,
   reconciliation_state TEXT CHECK (reconciliation_state IN
     ('pending','confirmed_succeeded','confirmed_failed','manual')),
@@ -843,6 +844,11 @@ CREATE TABLE tool_executions (
   CHECK ((status IN ('Succeeded','Failed')) = (finished_at IS NOT NULL)),
   CHECK (status <> 'Unknown' OR reconciliation_state IS NOT NULL),
   CHECK ((lease_owner IS NULL) = (lease_until IS NULL)),
+  CHECK ((lease_owner IS NULL) = (heartbeat_at IS NULL)),
+  CHECK ((status = 'Executing') = (lease_owner IS NOT NULL)),
+  CHECK (status <> 'Authorized' OR (version = 0 AND fencing_token = 0
+         AND lease_owner IS NULL AND lease_until IS NULL AND heartbeat_at IS NULL
+         AND finished_at IS NULL)),
   UNIQUE (tenant_id, command_id),
   UNIQUE (tenant_id, decision_id),
   FOREIGN KEY (tenant_id, object_id, invocation_id, decision_id, decision,
@@ -1892,52 +1898,137 @@ CREATE TRIGGER trg_knowledge_chunk_interval_insert_guard
   BEFORE INSERT ON knowledge_chunks FOR EACH ROW
   EXECUTE FUNCTION knowledge_chunk_interval_insert_guard();
 
--- Tool execution state transition guard. Fencing-token equality is required for
--- state mutation; lease acquisition must increment the token in a separate
--- atomic UPDATE ... WHERE current token = expected token statement.
+-- ToolExecution owns an independent optimistic version and lease fence.
+-- The initial Authorized -> Executing CAS acquires the lease and advances both
+-- counters atomically. Heartbeats keep the same owner/token/version. An expired
+-- execution cannot be stolen and replayed: it must become Unknown for reconciliation.
 CREATE FUNCTION tool_execution_state_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE
+  status_changed BOOLEAN;
+  token_changed BOOLEAN;
+  heartbeat_only BOOLEAN;
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status <> 'Authorized' OR NEW.version <> 0 OR NEW.fencing_token <> 0
+       OR NEW.lease_owner IS NOT NULL OR NEW.lease_until IS NOT NULL
+       OR NEW.heartbeat_at IS NOT NULL OR NEW.finished_at IS NOT NULL THEN
+      RAISE EXCEPTION 'new tool execution must start Authorized at version/token zero without a lease'
+        USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF OLD.status IN ('Succeeded','Failed') THEN
-    -- r3 (R3-03): retention_purge (SECURITY DEFINER, owner qembed_definer) may only
-    -- NULL out output/output_expires_at of a terminal row; everything else is frozen.
+    -- retention_purge may only null output bytes and their expiry on terminal rows.
     IF current_user = 'qembed_definer'
        AND NEW.output IS NULL AND NEW.output_expires_at IS NULL
        AND (to_jsonb(NEW) - 'output' - 'output_expires_at')
          = (to_jsonb(OLD) - 'output' - 'output_expires_at') THEN
       RETURN NEW;
     END IF;
-    RAISE EXCEPTION 'terminal tool execution is immutable';
+    RAISE EXCEPTION 'terminal tool execution is immutable' USING ERRCODE = '55000';
   END IF;
-  IF NEW.fencing_token < OLD.fencing_token THEN
-    RAISE EXCEPTION 'stale fencing token';
+
+  IF (NEW.id, NEW.tenant_id, NEW.object_id, NEW.invocation_id, NEW.caller_id,
+      NEW.decision_id, NEW.decision, NEW.command_id, NEW.tool_id, NEW.tool_version_id,
+      NEW.snapshot_id, NEW.binding_version, NEW.operation, NEW.arguments_hash,
+      NEW.created_at, NEW.external_idempotency_key)
+     IS DISTINCT FROM
+     (OLD.id, OLD.tenant_id, OLD.object_id, OLD.invocation_id, OLD.caller_id,
+      OLD.decision_id, OLD.decision, OLD.command_id, OLD.tool_id, OLD.tool_version_id,
+      OLD.snapshot_id, OLD.binding_version, OLD.operation, OLD.arguments_hash,
+      OLD.created_at, OLD.external_idempotency_key) THEN
+    RAISE EXCEPTION 'tool execution identity is immutable' USING ERRCODE = '55000';
   END IF;
-  -- The repository must CAS on the token observed at claim time. Completion
-  -- uses that same current token; reclaim increments it in a separate claim UPDATE.
-  IF OLD.status IS DISTINCT FROM NEW.status AND NOT (
-       (OLD.status='Authorized' AND NEW.status IN ('Executing','Failed')) OR
-       (OLD.status='Executing' AND NEW.status IN ('Succeeded','Failed','Unknown')) OR
-       (OLD.status='Unknown' AND NEW.status IN ('Succeeded','Failed'))
-     ) THEN
-    RAISE EXCEPTION 'invalid tool execution state transition: % -> %', OLD.status, NEW.status;
+
+  status_changed := NEW.status IS DISTINCT FROM OLD.status;
+  token_changed := NEW.fencing_token IS DISTINCT FROM OLD.fencing_token;
+
+  IF status_changed AND NOT (
+       (OLD.status = 'Authorized' AND NEW.status IN ('Executing','Failed'))
+    OR (OLD.status = 'Executing' AND NEW.status IN ('Succeeded','Failed','Unknown'))
+    OR (OLD.status = 'Unknown' AND NEW.status IN ('Succeeded','Failed'))
+  ) THEN
+    RAISE EXCEPTION 'invalid tool execution state transition: % -> %', OLD.status, NEW.status
+      USING ERRCODE = '23514';
   END IF;
-  -- r3 (R3-05): NULL reconciliation_state used to slip through (NULL NOT IN (...) is NULL)
-  IF OLD.status='Unknown' AND NEW.status IN ('Succeeded','Failed')
-     AND (NEW.reconciliation_state IS NULL
-          OR NEW.reconciliation_state NOT IN ('confirmed_succeeded','confirmed_failed')
-          OR (NEW.status='Succeeded') <> (NEW.reconciliation_state='confirmed_succeeded')) THEN
-    RAISE EXCEPTION 'Unknown can become terminal only through reconciliation (matching confirmed state)';
+
+  IF status_changed THEN
+    IF NEW.version::numeric <> OLD.version::numeric + 1 THEN
+      RAISE EXCEPTION 'tool execution version must advance exactly once per state transition'
+        USING ERRCODE = '40001';
+    END IF;
+  ELSIF NEW.version <> OLD.version THEN
+    RAISE EXCEPTION 'tool execution version changed without a state transition'
+      USING ERRCODE = '40001';
   END IF;
-  IF OLD.status='Executing' AND OLD.lease_until < now() AND NEW.status NOT IN ('Unknown') THEN
-    RAISE EXCEPTION 'expired execution lease must become Unknown';
+
+  IF OLD.status = 'Authorized' AND NEW.status = 'Executing' THEN
+    IF NEW.fencing_token::numeric <> OLD.fencing_token::numeric + 1
+       OR NEW.lease_owner IS NULL OR NEW.lease_until <= clock_timestamp()
+       OR NEW.heartbeat_at IS NULL OR NEW.finished_at IS NOT NULL
+       OR NEW.reconciliation_state IS NOT NULL THEN
+      RAISE EXCEPTION 'claim must acquire a live lease and advance the execution fencing token'
+        USING ERRCODE = '23514';
+    END IF;
+  ELSIF token_changed THEN
+    RAISE EXCEPTION 'tool execution fencing token may change only on initial lease acquisition'
+      USING ERRCODE = '40001';
   END IF;
-  IF NEW.status='Unknown' AND NEW.reconciliation_state IS NULL THEN
-    RAISE EXCEPTION 'Unknown requires reconciliation state';
+
+  IF OLD.status = 'Executing' AND NEW.status IN ('Succeeded','Failed') THEN
+    IF OLD.lease_until <= clock_timestamp() OR OLD.lease_owner IS NULL
+       OR NEW.lease_owner IS NOT NULL OR NEW.lease_until IS NOT NULL
+       OR NEW.heartbeat_at IS NOT NULL THEN
+      RAISE EXCEPTION 'an expired or unowned execution lease cannot commit a result'
+        USING ERRCODE = '40001';
+    END IF;
+  ELSIF OLD.status = 'Executing' AND NEW.status = 'Unknown' THEN
+    IF OLD.lease_until > clock_timestamp()
+       OR NEW.lease_owner IS NOT NULL OR NEW.lease_until IS NOT NULL
+       OR NEW.heartbeat_at IS NOT NULL
+       OR NEW.reconciliation_state IS DISTINCT FROM 'pending' THEN
+      RAISE EXCEPTION 'an execution becomes Unknown only after lease expiry and enters pending reconciliation'
+        USING ERRCODE = '23514';
+    END IF;
+  ELSIF OLD.status = 'Unknown' AND NEW.status IN ('Succeeded','Failed') THEN
+    IF NEW.reconciliation_state IS NULL
+       OR NEW.reconciliation_state NOT IN ('confirmed_succeeded','confirmed_failed')
+       OR (NEW.status = 'Succeeded') <> (NEW.reconciliation_state = 'confirmed_succeeded') THEN
+      RAISE EXCEPTION 'Unknown can become terminal only through matching confirmed reconciliation'
+        USING ERRCODE = '23514';
+    END IF;
+  ELSIF OLD.status = 'Authorized' AND NEW.status = 'Failed' THEN
+    IF NEW.lease_owner IS NOT NULL OR NEW.lease_until IS NOT NULL
+       OR NEW.heartbeat_at IS NOT NULL THEN
+      RAISE EXCEPTION 'an unclaimed execution cannot finish with a lease'
+        USING ERRCODE = '23514';
+    END IF;
   END IF;
+
+  IF OLD.status = 'Executing' AND NEW.status = 'Executing' THEN
+    heartbeat_only :=
+      (to_jsonb(NEW) - 'lease_until' - 'heartbeat_at')
+      = (to_jsonb(OLD) - 'lease_until' - 'heartbeat_at');
+    IF NOT heartbeat_only OR OLD.lease_until <= clock_timestamp()
+       OR NEW.lease_owner IS DISTINCT FROM OLD.lease_owner
+       OR NEW.fencing_token <> OLD.fencing_token
+       OR NEW.lease_until <= OLD.lease_until
+       OR NEW.lease_until <= clock_timestamp()
+       OR NEW.heartbeat_at IS NULL OR NEW.heartbeat_at < OLD.heartbeat_at THEN
+      RAISE EXCEPTION 'heartbeat must extend the current live lease without changing execution state'
+        USING ERRCODE = '40001';
+    END IF;
+  ELSIF NOT status_changed AND NEW IS DISTINCT FROM OLD THEN
+    RAISE EXCEPTION 'tool execution fields are immutable outside a state transition or lease heartbeat'
+      USING ERRCODE = '55000';
+  END IF;
+
   RETURN NEW;
 END $$;
 CREATE TRIGGER trg_tool_execution_state_guard
-  BEFORE UPDATE ON tool_executions FOR EACH ROW
+  BEFORE INSERT OR UPDATE ON tool_executions FOR EACH ROW
   EXECUTE FUNCTION tool_execution_state_guard();
 
 -- RT-042: explicitly ensure definer remains non-login, non-superuser, no bypass.

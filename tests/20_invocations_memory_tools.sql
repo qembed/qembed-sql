@@ -62,9 +62,36 @@ SELECT tt.try('payload ok','ok',$q$INSERT INTO tool_command_payloads(tenant_id,c
 SELECT tt.try('payload hash mismatch','err',$q$UPDATE tool_command_payloads SET arguments_hash=digest('zz','sha256')$q$);
 SELECT tt.try('exec Authorized','ok',$q$INSERT INTO tool_executions(id,tenant_id,object_id,invocation_id,caller_id,decision_id,command_id,tool_id,tool_version_id,snapshot_id,binding_version,operation,arguments_hash,status)
  VALUES ('ee000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','1a000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000001','d1000000-0000-0000-0000-000000000001','c0000000-0000-0000-0000-000000000001','11111111-0000-0000-0000-000000000001','11111111-0000-0000-0000-0000000000a2','5a000000-0000-0000-0000-000000000001',2,'op',digest('a','sha256'),'Authorized')$q$);
-SELECT tt.try('exec ->Executing (lease)','ok',$q$UPDATE tool_executions SET status='Executing',lease_owner='w1',lease_until=now()+interval '1 min',fencing_token=1 WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
-SELECT tt.try('exec ->Succeeded w/ output','ok',$q$UPDATE tool_executions SET status='Succeeded',lease_owner=NULL,lease_until=NULL,finished_at=now(),output='{"r":1}',output_expires_at=now()-interval '1 hour' WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('ToolExecution starts with its own version/token zero',
+ $q$SELECT version=0 AND fencing_token=0 AND lease_owner IS NULL AND heartbeat_at IS NULL
+      FROM tool_executions WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.try('exec ->Executing acquires independent lease','ok',$q$UPDATE tool_executions
+ SET status='Executing',lease_owner='tool-worker-a',lease_until=now()+interval '1 min',
+     heartbeat_at=now(),fencing_token=1,version=1
+ WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('ToolExecution claim advances only its own version/token',
+ $q$SELECT version=1 AND fencing_token=1 AND lease_owner='tool-worker-a'
+      AND heartbeat_at IS NOT NULL FROM tool_executions
+      WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.try('ToolExecution heartbeat retains version and fence','ok',$q$UPDATE tool_executions
+ SET lease_until=now()+interval '2 min',heartbeat_at=now()
+ WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('heartbeat does not advance version or fencing token',
+ $q$SELECT version=1 AND fencing_token=1 FROM tool_executions
+      WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.try('stale ToolExecution fence cannot commit','err',$q$UPDATE tool_executions
+ SET status='Succeeded',lease_owner=NULL,lease_until=NULL,heartbeat_at=NULL,
+     finished_at=now(),version=2,fencing_token=0
+ WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.try('exec ->Succeeded w/ output','ok',$q$UPDATE tool_executions
+ SET status='Succeeded',lease_owner=NULL,lease_until=NULL,heartbeat_at=NULL,
+     finished_at=now(),version=2,output='{"r":1}',output_expires_at=now()-interval '1 hour'
+ WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('ToolExecution completion increments own version only',
+ $q$SELECT version=2 AND fencing_token=1 AND lease_owner IS NULL
+      FROM tool_executions WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
 SELECT tt.try('exec terminal immutable','err',$q$UPDATE tool_executions SET operation='z' WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+
 RESET ROLE;
 
 -- RUST-046 / T-04 + T-21: provenance claims must be rejected by PostgreSQL,
