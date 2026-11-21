@@ -23,13 +23,18 @@ SELECT md5('qsa020-memory-' || n)::uuid,
        'User', 'Unverified', 0.5
   FROM generate_series(1, 100) AS n;
 
+INSERT INTO embedding_models(id, provider, model_name, dimension, distance_metric)
+SELECT 'qsa020-model-' || n, 'benchmark', 'qsa020-model-' || n, 3, 'cosine'
+  FROM generate_series(1, 1000) AS n;
+
 INSERT INTO memory_embeddings
   (tenant_id, object_id, memory_id, model_id, embedding)
 SELECT 'a0200000-0000-0000-0000-000000000001',
        'a0210000-0000-0000-0000-000000000001',
-       md5('qsa020-memory-' || n)::uuid,
-       'm3', '[1,0,0]'
-  FROM generate_series(1, 100) AS n;
+       md5('qsa020-memory-' || memory_n)::uuid,
+       'qsa020-model-' || model_n, '[1,0,0]'
+  FROM generate_series(1, 100) AS memory_n
+ CROSS JOIN generate_series(1, 1000) AS model_n;
 
 INSERT INTO memory_conflicts
   (id, tenant_id, object_id, memory_id, conflicting_memory_id, status)
@@ -45,7 +50,7 @@ SELECT md5('qsa020-conflict-' || d || '-' || n)::uuid,
 ANALYZE memory_conflicts;
 ANALYZE memory_embeddings;
 
-\echo '=== QSA-020 CURRENT memory_embeddings PK-prefix lookup ==='
+\echo '=== QSA-020 CURRENT memory_embeddings PK-prefix lookup (100,000 rows) ==='
 EXPLAIN (ANALYZE, BUFFERS, SETTINGS)
 SELECT memory_id
   FROM memory_embeddings
@@ -91,7 +96,7 @@ SELECT id
   FROM memory_conflicts
  WHERE tenant_id = 'a0200000-0000-0000-0000-000000000001'
    AND object_id = 'a0210000-0000-0000-0000-000000000001'
-   AND memory_id = md5('qsa020-memory-43')::uuid;
+   AND memory_id = md5('qsa020-memory-55')::uuid;
 
 \echo '=== QSA-020 AFTER indexes: conflicting_memory_id lookup ==='
 EXPLAIN (ANALYZE, BUFFERS, SETTINGS)
@@ -99,9 +104,9 @@ SELECT id
   FROM memory_conflicts
  WHERE tenant_id = 'a0200000-0000-0000-0000-000000000001'
    AND object_id = 'a0210000-0000-0000-0000-000000000001'
-   AND conflicting_memory_id = md5('qsa020-memory-43')::uuid;
+   AND conflicting_memory_id = md5('qsa020-memory-55')::uuid;
 
 \echo '=== QSA-020 AFTER indexes: memory deletion and all FK cascades ==='
 EXPLAIN (ANALYZE, BUFFERS, SETTINGS)
 DELETE FROM memories
- WHERE id = md5('qsa020-memory-43')::uuid;
+ WHERE id = md5('qsa020-memory-55')::uuid;
