@@ -41,7 +41,7 @@ SELECT tt.try('QSA-006 runtime may delete its own switch','ok',
       WHERE id='f0000000-0000-0000-0000-000000000003'$q$);
 -- Tenant-scoped definer functions remain callable by runtime.
 SELECT tt.chk('authenticate_principal', $q$SELECT count(*)=1 FROM authenticate_principal('\x01')$q$);
-SELECT tt.try('resolve_object_tenant','ok',$q$SELECT resolve_object_tenant('0b000000-0000-0000-0000-000000000001')$q$);
+SELECT tt.try('resolve_object_tenant','ok',$q$SELECT resolve_object_tenant('aaaaaaaa-0000-0000-0000-000000000001','0b000000-0000-0000-0000-000000000001')$q$);
 SELECT tt.try('T-54 runtime cannot call retention_purge','err',$q$SELECT retention_purge('outbox_messages',now(),'x')$q$);
 
 -- Cross-tenant discovery and global reservation expiry belong to qembed_worker.
