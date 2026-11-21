@@ -40,6 +40,17 @@ The lock must be held until the begin-invocation transaction commits. A plain un
 
 SQL-011 introduces the physical relation, grant/revoke/resolution functions, RLS/grants, and regression tests. It does not change the Rust Principal, Scope, or TenantTransaction implementation. The Rust follow-up must add trusted Principal context and a transaction-scoped delegation resolver/lock before RUST-036 can safely create invocations.
 
-The app.* settings are trusted application context, just like the existing tenant setting. RLS and SECURITY DEFINER functions are not a defense against arbitrary SQL executed with the runtime database role; that role and its connection path must remain application-internal.
+### QSA-003 — explicit trust boundary for session GUC identity
+
+The values `app.tenant_id`, `app.principal_id`, and `app.caller_id` are custom PostgreSQL settings, not authenticated database identities. `SET LOCAL` limits their lifetime to a transaction; it does **not** prove who supplied the value. A session operating as (or through membership in) `qembed_runtime` can set these values itself.
+
+Consequently:
+
+1. RLS and delegation functions protect against missing context, accidental unscoped queries, and application code that uses the trusted transaction wrapper correctly.
+2. They do **not** protect against arbitrary SQL execution under `qembed_runtime`. An attacker with SQL execution through that role can set another tenant/principal/caller GUC directly, potentially reading another tenant's rows or bypassing Caller delegation checks for episodic memory.
+3. The runtime database role and its connection path must remain application-internal. SQL must use bound parameters; user-supplied SQL and dynamic SQL built from untrusted input are prohibited. This is an application trust boundary, not a database-enforced isolation boundary.
+4. The current schema does not make these GUCs unforgeable. Do not describe transaction-local GUCs as cryptographic identity or as protection from SQL injection.
+
+**Architecture decision still required:** if the production threat model must withstand arbitrary SQL execution under the runtime role, the identity model must change. Candidate directions include per-tenant database identities or a privileged context-establishment mechanism that verifies an authenticated claim the runtime role cannot forge. Either option affects connection pooling, Rust transaction setup, RLS policies, and deployment roles; it is not achieved by changing `SET LOCAL` to `SET` or by another trigger.
 
 No automatic self-mapping, caller creation, transitive delegation, or fallback from missing delegation is permitted.

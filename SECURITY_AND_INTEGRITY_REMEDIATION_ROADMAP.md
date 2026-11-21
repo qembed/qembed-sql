@@ -33,6 +33,7 @@ This roadmap supersedes the ordinary SQL feature backlog while any P0 item is op
 - `NOT_REPRODUCED` — current DDL/behavior already enforces the reported invariant; regression evidence is recorded.
 - `DEFERRED_TO_FUTURE_FEATURE` — the schema contract is explicitly future-facing and no current runtime path claims support.
 - `DEFERRED_TO_RUST` — the SQL concern is governed by an accepted Rust/application contract and requires its application-level tests.
+- `DOCUMENTED_RISK` — the current trust boundary is explicit, but owner approval is still required to accept it or fund a stronger architecture.
 - `IN_PROGRESS` — remediation PR is open.
 - `BLOCKED` — requires a documented decision or external dependency.
 - `VERIFIED` — regression test and target-environment evidence pass on merged code.
@@ -101,7 +102,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `SOURCE_CONFIRMED` / architecture decision required — current schema comments explicitly state that RLS GUC context assumes application-internal SQL execution; live current-base revalidation remains pending.
+**Current status:** `DOCUMENTED_RISK` / architecture decision required — [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) now explicitly states that `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session-settable and can be forged by arbitrary SQL under `qembed_runtime`. This documents the boundary; it does not mitigate it.
 
 **Reported behavior:** `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session settings writable by the runtime role. Under arbitrary SQL execution as `qembed_runtime`, a caller can forge context and bypass the intended delegation boundary, including episodic-memory isolation.
 
@@ -326,7 +327,7 @@ Every remediation PR must include:
 |---|---|---|---|---|
 | QSA-001 | PR #29; 396/396 PR-head and post-merge | [PR #29](https://github.com/qembed/qembed-sql/pull/29) | 396/396 | VERIFIED |
 | QSA-002 | PR #28; 388/388 PR-head and post-merge | [PR #28](https://github.com/qembed/qembed-sql/pull/28) | 388/388 | VERIFIED |
-| QSA-003 | Source-confirmed: GUC trust boundary documented in schema | — | Pending | SOURCE_CONFIRMED |
+| QSA-003 | Explicit GUC spoofing threat model in ADR RT-049; owner decision pending | [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) | Pending | DOCUMENTED_RISK |
 | QSA-004 | PR #34; 409/409 PR-head and post-merge | [PR #34](https://github.com/qembed/qembed-sql/pull/34) | 409/409 | VERIFIED |
 | QSA-005 | PR #31; 404/404 PR-head and post-merge | [PR #31](https://github.com/qembed/qembed-sql/pull/31) | 404/404 | VERIFIED |
 | QSA-006 | PR #35; 416/416 PR-head and post-merge | [PR #35](https://github.com/qembed/qembed-sql/pull/35) | 416/416 | VERIFIED |
