@@ -2,6 +2,10 @@
 SET client_min_messages=warning;
 SET track_io_timing=on;
 
+-- Keep the baseline phase representative even when the canonical schema
+-- already contains the production candidate index.
+DROP INDEX IF EXISTS idx_chunks_document;
+
 -- Controlled PG19 benchmark for QSA-019.
 -- 100 documents x 1,000 chunks under one tenant/object makes the current
 -- (tenant_id, object_id, valid_from_revision, valid_to_revision) index unable
@@ -52,6 +56,9 @@ DELETE FROM knowledge_documents
 CREATE INDEX qsa019_bench_chunks_document_idx
   ON knowledge_chunks (tenant_id, object_id, document_id);
 ANALYZE knowledge_chunks;
+
+SELECT pg_size_pretty(pg_relation_size('qsa019_bench_chunks_document_idx'))
+  AS qsa019_candidate_index_size;
 
 \echo '=== QSA-019 AFTER candidate index: document chunk lookup ==='
 EXPLAIN (ANALYZE, BUFFERS, SETTINGS)
