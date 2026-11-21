@@ -124,8 +124,8 @@ BEGIN
     UPDATE outbox_publication_receipts SET publication_duplicate=true
       WHERE tenant_id=tid AND delivery_id=did;
     INSERT INTO tt.res VALUES ('RUST-051b PubAck history is immutable','55000','accepted',false,'receipt update unexpectedly accepted');
-  EXCEPTION WHEN SQLSTATE '55000' THEN
-    INSERT INTO tt.res VALUES ('RUST-051b PubAck history is immutable','55000','55000',true,'');
+  EXCEPTION WHEN OTHERS THEN
+    INSERT INTO tt.res VALUES ('RUST-051b PubAck history is immutable','55000',SQLSTATE,SQLSTATE='55000',SQLERRM);
   END;
   BEGIN
     UPDATE outbox_messages
