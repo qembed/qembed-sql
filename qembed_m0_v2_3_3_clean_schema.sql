@@ -1173,6 +1173,37 @@ CREATE TABLE kill_switches (   -- restricted-global: tenant_id NULL for platform
   FOREIGN KEY (tenant_id, object_id) REFERENCES objects(tenant_id, object_id)
 );
 
+-- Record the role that created a switch. Tenant runtime may manage its own
+-- switch, but cannot remove or weaken a tenant-scoped switch created by ops.
+ALTER TABLE kill_switches ADD COLUMN managed_by_role NAME NOT NULL;
+CREATE FUNCTION kill_switches_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $kill_switches_guard$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.managed_by_role := current_user;
+    RETURN NEW;
+  END IF;
+
+  IF OLD.managed_by_role <> current_user AND current_user <> 'qembed_admin' THEN
+    RAISE EXCEPTION 'kill switch is managed by a privileged role'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.managed_by_role IS DISTINCT FROM OLD.managed_by_role THEN
+      RAISE EXCEPTION 'kill switch management authority is immutable'
+        USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RETURN OLD;
+END
+$kill_switches_guard$;
+CREATE TRIGGER trg_kill_switches_guard
+  BEFORE INSERT OR UPDATE OR DELETE ON kill_switches
+  FOR EACH ROW EXECUTE FUNCTION kill_switches_guard();
+
 -- -----------------------------------------------------------------------------
 -- 13. Goals/tasks (M4 contracts), deletion, retention
 -- -----------------------------------------------------------------------------
