@@ -78,6 +78,40 @@ SELECT tt.chk('AUDIT-006 A can see own snapshot', $q$SELECT count(*)>=1 FROM sna
 SELECT tt.chk('AUDIT-006 A can see own event', $q$SELECT count(*)>=1 FROM events WHERE aggregate_id='0b000000-0000-0000-0000-000000000001'$q$);
 SELECT tt.chk('AUDIT-006 A can see own outbox row', $q$SELECT count(*)>=1 FROM outbox_messages$q$);
 
+-- QSA-017: RLS hides Tenant B rows, but global UUID UNIQUE constraints
+-- still reject a Tenant A insert that collides with a known Tenant B UUID.
+-- These negative probes expose the existence of the foreign identifier via
+-- uniqueness errors without granting SELECT on the foreign row.
+INSERT INTO objects(tenant_id,object_id,state)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+        'b1000000-0000-0000-0000-000000000001','draft');
+INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number,status)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+        'b1000000-0000-0000-0000-000000000001',
+        'b1000000-0000-0000-0000-000000000002',1,'draft');
+SELECT tt.try('QSA-017 foreign object UUID collision is rejected by global uniqueness','err',
+ $q$INSERT INTO objects(tenant_id,object_id,state)
+      VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+              'bb000000-0000-0000-0000-000000000001','draft')$q$);
+SELECT tt.try('QSA-017 foreign ObjectVersion UUID collision is rejected globally','err',
+ $q$INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number,status)
+      VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+              'b1000000-0000-0000-0000-000000000001',
+              'bb000000-0000-0000-0000-000000000002',2,'draft')$q$);
+SELECT tt.try('QSA-017 foreign Snapshot UUID collision is rejected globally','err',
+ $q$INSERT INTO snapshots(tenant_id,snapshot_id,object_id,object_version_id,schema_version,
+                          canonical_json,content_hash,json_projection)
+      VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+              'bb000000-0000-0000-0000-000000000003',
+              'b1000000-0000-0000-0000-000000000001',
+              'b1000000-0000-0000-0000-000000000002',1,
+              convert_to('{}','UTF8'),digest(convert_to('{}','UTF8'),'sha256'),'{}'::jsonb)$q$);
+SELECT tt.try('QSA-017 foreign Event UUID collision is rejected globally','err',
+ $q$INSERT INTO events(tenant_id,event_id,aggregate_type,aggregate_id,event_type,payload)
+      VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+              'bb000000-0000-0000-0000-000000000004','object',
+              'b1000000-0000-0000-0000-000000000001','qsa017_collision','{}')$q$);
+
 -- A cannot write a row tagged with B, and an unset tenant context sees no rows.
 SELECT tt.try('AUDIT-006 A cannot insert object for B','err',$q$INSERT INTO objects(tenant_id,object_id,state) VALUES ('bbbbbbbb-0000-0000-0000-000000000002',gen_random_uuid(),'draft')$q$);
 SELECT set_config('app.tenant_id','',false);
