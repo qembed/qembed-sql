@@ -212,7 +212,7 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-009 — Require a lease for Executing ToolExecution rows
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `NOT_REPRODUCED` — current DDL already enforces the invariant through combined checks: `(status = 'Executing') = (lease_owner IS NOT NULL)` and `(lease_owner IS NULL) = (lease_until IS NULL)`. Together they imply `Executing => lease_until IS NOT NULL`. A direct runtime transition test is added in [PR #38](https://github.com/qembed/qembed-sql/pull/38).
+**Current status:** `NOT_REPRODUCED` — current DDL already enforces the invariant through combined checks: `(status = 'Executing') = (lease_owner IS NOT NULL)` and `(lease_owner IS NULL) = (lease_until IS NULL)`. Together they imply `Executing => lease_until IS NOT NULL`. A direct runtime transition test is added in [PR #39](https://github.com/qembed/qembed-sql/pull/39).
 
 - [x] Inspect the current ToolExecution status/lease CHECK constraints and transition guard.
 - [x] Add a negative transition test proving an Executing row cannot omit `lease_until`.
@@ -332,7 +332,7 @@ Every remediation PR must include:
 | QSA-006 | PR #35; 416/416 PR-head and post-merge | [PR #35](https://github.com/qembed/qembed-sql/pull/35) | 416/416 | VERIFIED |
 | QSA-007 | PR #30; 400/400 PR-head and post-merge | [PR #30](https://github.com/qembed/qembed-sql/pull/30) | 400/400 | VERIFIED |
 | QSA-008 | Future principal/memory model; no current Rust memory write adapter | — | N/A | DEFERRED_TO_FUTURE_FEATURE |
-| QSA-009 | Combined CHECK constraints imply Executing has lease_until; negative test in PR #38 | [PR #38](https://github.com/qembed/qembed-sql/pull/38) | Pending | NOT_REPRODUCED |
+| QSA-009 | Combined CHECK constraints imply Executing has lease_until; negative test in PR #39 | [PR #39](https://github.com/qembed/qembed-sql/pull/39) | Pending | NOT_REPRODUCED |
 | QSA-010 | Pending | — | Pending | REVALIDATE |
 | QSA-011 | PR #36; 418/418 PR-head and post-merge | [PR #36](https://github.com/qembed/qembed-sql/pull/36) | 418/418 | VERIFIED |
 | QSA-012 | ADR RUST-044 assigns exact-byte dedup check to Rust; read-time corruption test pending | — | Pending | DEFERRED_TO_RUST |
