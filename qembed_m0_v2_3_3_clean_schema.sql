@@ -937,7 +937,13 @@ CREATE TABLE outbox_messages (
   payload JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   delivered_at TIMESTAMPTZ,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  claim_token BIGINT NOT NULL DEFAULT 0 CHECK (claim_token >= 0),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   PRIMARY KEY (tenant_id, delivery_id),
+  CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
+  CHECK (delivered_at IS NULL OR lease_owner IS NULL),
   UNIQUE (tenant_id, event_id),
   FOREIGN KEY (tenant_id, event_id)
     REFERENCES events (tenant_id, event_id)
@@ -1264,9 +1270,9 @@ CREATE POLICY ks_write ON kill_switches FOR ALL TO qembed_runtime
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY ks_admin ON kill_switches TO qembed_admin USING (true) WITH CHECK (true);
 
--- dispatcher: delivery only
+-- dispatcher: cross-tenant delivery projection only. It must not read
+-- the append-only domain event log or event identity columns.
 CREATE POLICY disp_outbox ON outbox_messages TO qembed_dispatcher USING (true) WITH CHECK (true);
-CREATE POLICY disp_events ON events FOR SELECT TO qembed_dispatcher USING (true);
 
 -- definer role (owner of SECURITY DEFINER functions): only the tables their bodies touch
 DO $$
@@ -1639,10 +1645,16 @@ GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation
   list_expired_invocation_leases(integer), list_pending_reconciliations(integer),
   sweep_expired_reservations(integer) TO qembed_runtime;
 
--- dispatcher: only delivery
-GRANT SELECT ON events TO qembed_dispatcher;
-GRANT SELECT ON outbox_messages TO qembed_dispatcher;
-GRANT UPDATE (delivered_at) ON outbox_messages TO qembed_dispatcher;
+-- dispatcher: only the delivery projection; no event log or event_id access.
+REVOKE SELECT ON events FROM qembed_dispatcher;
+REVOKE SELECT ON outbox_messages FROM qembed_dispatcher;
+GRANT SELECT (
+  tenant_id, delivery_id, topic, payload, created_at, delivered_at,
+  lease_owner, lease_expires_at, claim_token, attempts
+) ON outbox_messages TO qembed_dispatcher;
+GRANT UPDATE (
+  delivered_at, lease_owner, lease_expires_at, claim_token, attempts
+) ON outbox_messages TO qembed_dispatcher;
 
 -- admin
 GRANT SELECT, INSERT, UPDATE ON tenants, principals, kill_switches, objects,
