@@ -8,7 +8,7 @@ SELECT tt.chk('AUDIT-005 events has exactly the Rust columns',
     FROM pg_attribute WHERE attrelid='public.events'::regclass AND attnum>0 AND NOT attisdropped$q$);
 SELECT tt.chk('AUDIT-005 outbox_messages has exactly the Rust columns',
  $q$SELECT string_agg(attname, ',' ORDER BY attnum)
-      = 'tenant_id,delivery_id,event_id,topic,payload,created_at,delivered_at,lease_owner,lease_expires_at,claim_token,attempts'
+      = 'tenant_id,delivery_id,event_id,topic,payload,created_at,delivered_at,publication_stream,publication_sequence,publication_duplicate,lease_owner,lease_expires_at,claim_token,attempts'
     FROM pg_attribute WHERE attrelid='public.outbox_messages'::regclass AND attnum>0 AND NOT attisdropped$q$);
 SELECT tt.chk('AUDIT-005 event aggregate ordering index exists',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
@@ -32,6 +32,23 @@ SELECT tt.chk('RUST-051a outbox lease fencing columns and defaults exist',
      AND conname='outbox_lease_pair')
    AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.outbox_messages'::regclass
      AND conname='outbox_delivered_unleased')$q$);
+
+SELECT tt.chk('RUST-051b publication receipt columns and consistency constraint exist',
+ $q$SELECT
+   EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='publication_stream')
+   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='publication_sequence')
+   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='publication_duplicate')
+   AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.outbox_messages'::regclass AND conname='outbox_publication_receipt_consistent')$q$);
+SELECT tt.chk('RUST-051b dispatcher may read and write publication receipt only on Outbox',
+ $q$SELECT
+   has_column_privilege('qembed_dispatcher','public.outbox_messages','publication_stream','SELECT')
+   AND has_column_privilege('qembed_dispatcher','public.outbox_messages','publication_sequence','SELECT')
+   AND has_column_privilege('qembed_dispatcher','public.outbox_messages','publication_duplicate','SELECT')
+   AND has_column_privilege('qembed_dispatcher','public.outbox_messages','publication_stream','UPDATE')
+   AND has_column_privilege('qembed_dispatcher','public.outbox_messages','publication_sequence','UPDATE')
+   AND has_column_privilege('qembed_dispatcher','public.outbox_messages','publication_duplicate','UPDATE')
+   AND NOT has_column_privilege('qembed_dispatcher','public.outbox_messages','event_id','SELECT')
+   AND NOT has_table_privilege('qembed_dispatcher','public.events','SELECT')$q$);
 
 SELECT tt.chk('AUDIT-005 pending outbox index matches delivered_at predicate',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
@@ -83,7 +100,9 @@ BEGIN
   -- Pending rows must remain undelivered; the dispatcher updates only delivered_at.
   UPDATE outbox_messages SET created_at=now()-interval '2 days'
     WHERE tenant_id=tid AND delivery_id IN (did,pending_did);
-  UPDATE outbox_messages SET delivered_at=now()
+  UPDATE outbox_messages
+    SET delivered_at=now(), publication_stream='QEMBED_EVENTS',
+        publication_sequence=1, publication_duplicate=false
     WHERE tenant_id=tid AND delivery_id=did;
   SELECT delivered_at IS NOT NULL INTO ok FROM outbox_messages WHERE tenant_id=tid AND delivery_id=did;
   INSERT INTO tt.res VALUES ('AUDIT-005 delivered_at marks successful delivery','true',ok::text,ok,'');
