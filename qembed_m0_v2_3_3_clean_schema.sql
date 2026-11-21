@@ -948,9 +948,10 @@ CREATE TABLE outbox_messages (
   CONSTRAINT outbox_lease_pair CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
   CONSTRAINT outbox_delivered_unleased CHECK (delivered_at IS NULL OR lease_owner IS NULL),
   CONSTRAINT outbox_publication_receipt_consistent CHECK (
-    (delivered_at IS NULL AND publication_stream IS NULL AND publication_sequence IS NULL AND publication_duplicate IS NULL)
+    (publication_stream IS NULL AND publication_sequence IS NULL AND publication_duplicate IS NULL)
     OR
-    (delivered_at IS NOT NULL AND publication_stream IS NOT NULL AND publication_sequence IS NOT NULL AND publication_sequence > 0 AND publication_duplicate IS NOT NULL)
+    (publication_stream IS NOT NULL AND publication_stream <> '' AND publication_sequence IS NOT NULL
+      AND publication_sequence > 0 AND publication_duplicate IS NOT NULL AND delivered_at IS NOT NULL)
   ),
   UNIQUE (tenant_id, event_id),
   FOREIGN KEY (tenant_id, event_id)
