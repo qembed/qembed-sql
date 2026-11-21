@@ -944,9 +944,21 @@ CREATE TABLE outbox_messages (
   lease_expires_at TIMESTAMPTZ,
   claim_token BIGINT NOT NULL DEFAULT 0 CHECK (claim_token >= 0),
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  replay_requested_at TIMESTAMPTZ,
+  replay_reason TEXT,
+  replay_count INTEGER NOT NULL DEFAULT 0 CHECK (replay_count >= 0),
   PRIMARY KEY (tenant_id, delivery_id),
   CONSTRAINT outbox_lease_pair CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
-  CONSTRAINT outbox_delivered_unleased CHECK (delivered_at IS NULL OR lease_owner IS NULL),
+  CONSTRAINT outbox_delivered_unleased CHECK (
+    delivered_at IS NULL OR replay_requested_at IS NOT NULL OR lease_owner IS NULL
+  ),
+  CONSTRAINT outbox_replay_marker_pair CHECK (
+    (replay_requested_at IS NULL AND replay_reason IS NULL)
+    OR
+    (replay_requested_at IS NOT NULL
+      AND replay_reason = 'invocation_progress_deadline_expired'
+      AND delivered_at IS NOT NULL)
+  ),
   CONSTRAINT outbox_publication_receipt_consistent CHECK (
     (publication_stream IS NULL AND publication_sequence IS NULL AND publication_duplicate IS NULL)
     OR
@@ -961,6 +973,9 @@ CREATE TABLE outbox_messages (
 CREATE INDEX outbox_pending_idx
   ON outbox_messages (created_at, delivery_id)
   WHERE delivered_at IS NULL;
+CREATE INDEX outbox_replay_requested_idx
+  ON outbox_messages (replay_requested_at, created_at, delivery_id)
+  WHERE replay_requested_at IS NOT NULL;
 
 -- Append-only history of durable transport acknowledgements. The Outbox row
 -- remains the source of truth; this ledger preserves every PubAck across replay.
@@ -1622,6 +1637,74 @@ BEGIN
   RETURN n;
 END $$;
 
+-- PostgreSQL-driven replay for queued invocations whose progress deadline elapsed.
+-- The function is tenant-scoped through the trusted transaction-local app.tenant_id.
+CREATE FUNCTION sweep_stale_invocation_deliveries(
+  p_stale_before TIMESTAMPTZ,
+  p_limit INT
+)
+RETURNS TABLE (replayed_invocation_id UUID, replayed_delivery_id UUID)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $invocation_replay_sweeper$
+DECLARE
+  v_tenant_id UUID := NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+  candidate RECORD;
+BEGIN
+  IF v_tenant_id IS NULL THEN
+    RAISE EXCEPTION 'tenant context is required for invocation recovery'
+      USING ERRCODE = '42501';
+  END IF;
+  IF p_stale_before IS NULL OR p_stale_before > now()
+     OR p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 500 THEN
+    RAISE EXCEPTION 'invalid invocation recovery cutoff or batch size'
+      USING ERRCODE = '22023';
+  END IF;
+
+  FOR candidate IN
+    SELECT invocation.id AS invocation_id, delivery.delivery_id
+      FROM object_invocations AS invocation
+      JOIN outbox_messages AS delivery
+        ON delivery.tenant_id = invocation.tenant_id
+       AND delivery.topic = 'invocation.received'
+       AND delivery.payload->>'invocation_id' = invocation.id::text
+     WHERE invocation.tenant_id = v_tenant_id
+       AND invocation.status = 'Received'
+       AND invocation.cancel_requested_at IS NULL
+       AND (invocation.lease_owner IS NULL OR invocation.lease_until <= now())
+       AND COALESCE(invocation.heartbeat_at, invocation.started_at) <= p_stale_before
+       AND delivery.delivered_at IS NOT NULL
+       AND delivery.replay_requested_at IS NULL
+       AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at <= now())
+       -- Missing provider-attempt evidence fails closed. An ambiguous or completed
+       -- provider call must never be replayed by this queue-recovery path.
+       AND EXISTS (
+         SELECT 1
+           FROM provider_call_attempts AS attempt
+          WHERE attempt.tenant_id = invocation.tenant_id
+            AND attempt.object_id = invocation.object_id
+            AND attempt.invocation_id = invocation.id
+            AND attempt.state IN ('NotStarted', 'ConfirmedNotAccepted', 'CancelledBeforeSend')
+       )
+     ORDER BY COALESCE(invocation.heartbeat_at, invocation.started_at), delivery.created_at
+     LIMIT p_limit
+     FOR UPDATE OF invocation, delivery SKIP LOCKED
+  LOOP
+    UPDATE outbox_messages
+       SET replay_requested_at = clock_timestamp(),
+           replay_reason = 'invocation_progress_deadline_expired',
+           replay_count = replay_count + 1
+     WHERE tenant_id = v_tenant_id
+       AND delivery_id = candidate.delivery_id
+       AND replay_requested_at IS NULL;
+
+    IF FOUND THEN
+      replayed_invocation_id := candidate.invocation_id;
+      replayed_delivery_id := candidate.delivery_id;
+      RETURN NEXT;
+    END IF;
+  END LOOP;
+END
+$invocation_replay_sweeper$;
+
 -- Retention: fixed whitelist, per-table action (A8). Append-only tables are NOT purgeable here.
 CREATE FUNCTION retention_purge(p_table TEXT, p_cutoff TIMESTAMPTZ, p_reason TEXT) RETURNS BIGINT
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
@@ -1654,7 +1737,8 @@ DECLARE f TEXT;
 BEGIN
   FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid)',
      'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
-     'sweep_expired_reservations(integer)','retention_purge(text,timestamptz,text)'] LOOP
+     'sweep_expired_reservations(integer)','sweep_stale_invocation_deliveries(timestamp with time zone,integer)',
+     'retention_purge(text,timestamptz,text)'] LOOP
     EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
   END LOOP;
@@ -1688,7 +1772,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid),
   revoke_caller_delegation(uuid), resolve_delegated_caller(uuid), resolve_object_tenant(uuid),
   list_expired_invocation_leases(integer), list_pending_reconciliations(integer),
-  sweep_expired_reservations(integer) TO qembed_runtime;
+  sweep_expired_reservations(integer),
+  sweep_stale_invocation_deliveries(timestamptz,integer) TO qembed_runtime;
 
 -- dispatcher: only the delivery projection; no event log or event_id access.
 REVOKE SELECT ON events FROM qembed_dispatcher;
@@ -1696,11 +1781,13 @@ REVOKE SELECT ON outbox_messages FROM qembed_dispatcher;
 GRANT SELECT (
   tenant_id, delivery_id, topic, payload, created_at, delivered_at,
   publication_stream, publication_sequence, publication_duplicate,
-  lease_owner, lease_expires_at, claim_token, attempts
+  lease_owner, lease_expires_at, claim_token, attempts,
+  replay_requested_at, replay_reason, replay_count
 ) ON outbox_messages TO qembed_dispatcher;
 GRANT UPDATE (
   delivered_at, publication_stream, publication_sequence, publication_duplicate,
-  lease_owner, lease_expires_at, claim_token, attempts
+  lease_owner, lease_expires_at, claim_token, attempts,
+  replay_requested_at, replay_reason, replay_count
 ) ON outbox_messages TO qembed_dispatcher;
 REVOKE ALL PRIVILEGES ON outbox_publication_receipts FROM PUBLIC, qembed_runtime, qembed_dispatcher;
 GRANT INSERT ON outbox_publication_receipts TO qembed_dispatcher;
@@ -1723,7 +1810,11 @@ GRANT UPDATE (revoked_at) ON callers TO qembed_definer;          -- row lock for
 GRANT SELECT, INSERT, UPDATE ON principal_caller_delegations TO qembed_definer;
 GRANT SELECT, UPDATE ON budget_reservations, provider_call_attempts, usage_counters, tool_executions TO qembed_definer;
 GRANT SELECT, DELETE ON interaction_messages, memories, invocation_idempotency,
-  tool_command_payloads, outbox_messages TO qembed_definer;
+  tool_command_payloads TO qembed_definer;
+GRANT SELECT ON outbox_messages TO qembed_definer;
+GRANT UPDATE (heartbeat_at) ON object_invocations TO qembed_definer; -- row lock for replay eligibility
+GRANT UPDATE (replay_requested_at, replay_reason, replay_count)
+  ON outbox_messages TO qembed_definer;
 GRANT SELECT, UPDATE ON caller_usage_counters TO qembed_definer;   -- r3: sweeper releases per-caller reservations
 GRANT INSERT ON retention_log TO qembed_definer;
 GRANT USAGE, SELECT ON SEQUENCE retention_log_id_seq TO qembed_definer;
