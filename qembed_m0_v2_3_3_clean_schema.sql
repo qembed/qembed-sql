@@ -1666,7 +1666,7 @@ END
 $resolve_delegated_caller$;
 
 CREATE FUNCTION resolve_object_tenant(p_tenant_id UUID, p_object_id UUID)
-RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $
+RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $qsa017_resolve$
   -- The caller must supply its already-authenticated tenant scope. This avoids
   -- requiring globally unique ObjectIds (and prevents this helper from becoming
   -- a cross-tenant object-existence oracle).
@@ -1674,7 +1674,7 @@ RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public,
    WHERE tenant_id = p_tenant_id
      AND object_id = p_object_id
      AND p_tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
-$;
+$qsa017_resolve$;
 
 -- Cross-tenant discovery for background workers (A3): returns identifiers only;
 -- the worker then acts under the proper Scope (SET LOCAL app.tenant_id).
