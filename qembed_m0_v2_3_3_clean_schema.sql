@@ -971,15 +971,22 @@ CREATE TABLE outbox_publication_receipts (
   publication_stream TEXT NOT NULL CHECK (publication_stream <> ''),
   publication_sequence BIGINT NOT NULL CHECK (publication_sequence > 0),
   publication_duplicate BOOLEAN NOT NULL,
-  published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  FOREIGN KEY (tenant_id, delivery_id)
-    REFERENCES outbox_messages (tenant_id, delivery_id) ON DELETE RESTRICT
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Deliberately no FK to outbox_messages: retention may prune delivered Outbox
+-- rows, while this immutable audit history must survive independently.
 CREATE INDEX outbox_publication_receipts_delivery_idx
   ON outbox_publication_receipts (tenant_id, delivery_id, published_at, receipt_id);
+CREATE FUNCTION reject_outbox_publication_receipt_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $receipt_immutable$
+BEGIN
+  RAISE EXCEPTION 'outbox_publication_receipts is append-only'
+    USING ERRCODE = '55000';
+END
+$receipt_immutable$;
 CREATE TRIGGER outbox_publication_receipts_append_only
   BEFORE UPDATE OR DELETE ON outbox_publication_receipts
-  FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
+  FOR EACH ROW EXECUTE FUNCTION reject_outbox_publication_receipt_mutation();
 COMMENT ON TABLE outbox_publication_receipts IS
   'Append-only history of transport PubAck receipts; never a business completion ledger';
 
