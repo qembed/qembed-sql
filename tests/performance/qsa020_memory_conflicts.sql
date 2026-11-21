@@ -2,6 +2,10 @@
 SET client_min_messages=warning;
 SET track_io_timing=on;
 
+-- Keep the before phase valid after the canonical schema gains these indexes.
+DROP INDEX IF EXISTS idx_memory_conflicts_memory;
+DROP INDEX IF EXISTS idx_memory_conflicts_conflicting_memory;
+
 -- Controlled PG19 benchmark for QSA-020.
 -- 100 memories, each with 1,000 outgoing and 1,000 incoming conflict edges.
 -- This isolates both memory_conflicts FK cascades. memory_embeddings already
