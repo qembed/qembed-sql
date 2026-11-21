@@ -1305,6 +1305,10 @@ CREATE POLICY ks_admin ON kill_switches TO qembed_admin USING (true) WITH CHECK 
 CREATE POLICY disp_outbox ON outbox_messages TO qembed_dispatcher USING (true) WITH CHECK (true);
 ALTER TABLE outbox_publication_receipts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE outbox_publication_receipts FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON outbox_publication_receipts
+  FOR ALL TO qembed_runtime
+  USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
 CREATE POLICY disp_outbox_receipts ON outbox_publication_receipts
   FOR INSERT TO qembed_dispatcher WITH CHECK (true);
 
@@ -1345,7 +1349,7 @@ BEGIN
       'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
       'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
       'object_tools','policy_decisions','tool_command_payloads','tool_executions',
-      'event_stream_counters','events','outbox_messages','object_budgets',
+      'event_stream_counters','events','outbox_messages','outbox_publication_receipts','object_budgets',
       'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters',
       'budget_event_dedup','object_goals','object_tasks','deletion_jobs','deletion_ledger'
     ]) AS expected(table_name)
@@ -1403,7 +1407,7 @@ BEGIN
        'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
        'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
        'object_tools','policy_decisions','tool_command_payloads','tool_executions',
-       'event_stream_counters','events','outbox_messages','object_budgets',
+       'event_stream_counters','events','outbox_messages','outbox_publication_receipts','object_budgets',
        'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters',
        'budget_event_dedup','rate_limit_buckets','kill_switches','object_goals',
        'object_tasks','deletion_jobs','deletion_ledger','retention_log'
