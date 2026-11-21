@@ -324,6 +324,27 @@ CREATE TABLE callers (
   UNIQUE (tenant_id, token_hash), UNIQUE (tenant_id, id)
 );
 
+-- Caller identity is immutable and revocation is final. A replacement Caller
+-- receives a new id; a revoked identity is never reactivated in place.
+CREATE FUNCTION callers_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $caller_revocation_guard$
+BEGIN
+  IF (NEW.id, NEW.tenant_id, NEW.token_hash, NEW.caller_kind, NEW.created_at)
+     IS DISTINCT FROM
+     (OLD.id, OLD.tenant_id, OLD.token_hash, OLD.caller_kind, OLD.created_at) THEN
+    RAISE EXCEPTION 'caller identity and token digest are immutable'
+      USING ERRCODE = '55000';
+  END IF;
+  IF OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+    RAISE EXCEPTION 'caller revocation is final'
+      USING ERRCODE = '55000';
+  END IF;
+  RETURN NEW;
+END
+$caller_revocation_guard$;
+CREATE TRIGGER trg_callers_guard BEFORE UPDATE ON callers
+  FOR EACH ROW EXECUTE FUNCTION callers_guard();
+
 -- Principal -> Caller delegation. owner_principals remains the Rust authentication
 -- identity; callers remains the invocation identity. A principal may delegate to
 -- multiple callers. Each grant is an immutable historical record; revocation is final,
