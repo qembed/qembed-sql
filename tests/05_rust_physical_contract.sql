@@ -147,3 +147,17 @@ BEGIN
   END;
   INSERT INTO tt.res VALUES ('AUDIT-003 Rust default state and two Draft versions accepted','true',ok::text,ok,d);
 END $$;
+
+
+-- QSA-019: child-side index for document sync and knowledge_documents ON DELETE CASCADE.
+SELECT tt.chk('QSA-019 knowledge_chunks has a valid tenant/object/document index',
+ $q$SELECT EXISTS (
+    SELECT 1
+      FROM pg_index i
+      JOIN pg_class idx ON idx.oid=i.indexrelid
+      JOIN pg_class tbl ON tbl.oid=i.indrelid
+     WHERE tbl.oid='public.knowledge_chunks'::regclass
+       AND idx.relname='idx_chunks_document'
+       AND i.indisvalid AND i.indisready AND i.indpred IS NULL
+       AND pg_get_indexdef(i.indexrelid) LIKE '%(tenant_id, object_id, document_id)%'
+ )$q$);
