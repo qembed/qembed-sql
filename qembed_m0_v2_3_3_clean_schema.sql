@@ -962,6 +962,27 @@ CREATE INDEX outbox_pending_idx
   ON outbox_messages (created_at, delivery_id)
   WHERE delivered_at IS NULL;
 
+-- Append-only history of durable transport acknowledgements. The Outbox row
+-- remains the source of truth; this ledger preserves every PubAck across replay.
+CREATE TABLE outbox_publication_receipts (
+  receipt_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL,
+  delivery_id UUID NOT NULL,
+  publication_stream TEXT NOT NULL CHECK (publication_stream <> ''),
+  publication_sequence BIGINT NOT NULL CHECK (publication_sequence > 0),
+  publication_duplicate BOOLEAN NOT NULL,
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  FOREIGN KEY (tenant_id, delivery_id)
+    REFERENCES outbox_messages (tenant_id, delivery_id) ON DELETE RESTRICT
+);
+CREATE INDEX outbox_publication_receipts_delivery_idx
+  ON outbox_publication_receipts (tenant_id, delivery_id, published_at, receipt_id);
+CREATE TRIGGER outbox_publication_receipts_append_only
+  BEFORE UPDATE OR DELETE ON outbox_publication_receipts
+  FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
+COMMENT ON TABLE outbox_publication_receipts IS
+  'Append-only history of transport PubAck receipts; never a business completion ledger';
+
 -- -----------------------------------------------------------------------------
 -- 12. Budgets, usage, rate limits, kill switches
 -- -----------------------------------------------------------------------------
@@ -1282,6 +1303,10 @@ CREATE POLICY ks_admin ON kill_switches TO qembed_admin USING (true) WITH CHECK 
 -- dispatcher: cross-tenant delivery projection only. It must not read
 -- the append-only domain event log or event identity columns.
 CREATE POLICY disp_outbox ON outbox_messages TO qembed_dispatcher USING (true) WITH CHECK (true);
+ALTER TABLE outbox_publication_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE outbox_publication_receipts FORCE ROW LEVEL SECURITY;
+CREATE POLICY disp_outbox_receipts ON outbox_publication_receipts
+  FOR INSERT TO qembed_dispatcher WITH CHECK (true);
 
 -- definer role (owner of SECURITY DEFINER functions): only the tables their bodies touch
 DO $$
@@ -1666,6 +1691,8 @@ GRANT UPDATE (
   delivered_at, publication_stream, publication_sequence, publication_duplicate,
   lease_owner, lease_expires_at, claim_token, attempts
 ) ON outbox_messages TO qembed_dispatcher;
+REVOKE ALL PRIVILEGES ON outbox_publication_receipts FROM PUBLIC, qembed_runtime, qembed_dispatcher;
+GRANT INSERT ON outbox_publication_receipts TO qembed_dispatcher;
 
 -- admin
 GRANT SELECT, INSERT, UPDATE ON tenants, principals, kill_switches, objects,
