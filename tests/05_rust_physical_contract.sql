@@ -161,3 +161,25 @@ SELECT tt.chk('QSA-019 knowledge_chunks has a valid tenant/object/document index
        AND i.indisvalid AND i.indisready AND i.indpred IS NULL
        AND pg_get_indexdef(i.indexrelid) LIKE '%(tenant_id, object_id, document_id)%'
  )$q$);
+
+
+-- QSA-020: both memory_conflicts FK directions have valid child-side indexes.
+SELECT tt.chk('QSA-020 memory_conflicts has valid indexes for both memory references',
+ $q$SELECT
+   (SELECT count(*)=1
+      FROM pg_index i
+      JOIN pg_class idx ON idx.oid=i.indexrelid
+      JOIN pg_class tbl ON tbl.oid=i.indrelid
+     WHERE tbl.oid='public.memory_conflicts'::regclass
+       AND idx.relname='idx_memory_conflicts_memory'
+       AND i.indisvalid AND i.indisready AND i.indpred IS NULL
+       AND pg_get_indexdef(i.indexrelid) LIKE '%(tenant_id, object_id, memory_id)%')
+   AND
+   (SELECT count(*)=1
+      FROM pg_index i
+      JOIN pg_class idx ON idx.oid=i.indexrelid
+      JOIN pg_class tbl ON tbl.oid=i.indrelid
+     WHERE tbl.oid='public.memory_conflicts'::regclass
+       AND idx.relname='idx_memory_conflicts_conflicting_memory'
+       AND i.indisvalid AND i.indisready AND i.indpred IS NULL
+       AND pg_get_indexdef(i.indexrelid) LIKE '%(tenant_id, object_id, conflicting_memory_id)%')$q$);
