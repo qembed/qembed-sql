@@ -216,7 +216,7 @@ SELECT tt.chk('QSA-001 runtime has only tenant-scoped operational definer entry 
        AND has_function_privilege('qembed_runtime','public.grant_caller_delegation(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.revoke_caller_delegation(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.resolve_delegated_caller(uuid)','EXECUTE')
-       AND has_function_privilege('qembed_runtime','public.resolve_object_tenant(uuid)','EXECUTE')
+       AND has_function_privilege('qembed_runtime','public.resolve_object_tenant(uuid,uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.sweep_stale_invocation_deliveries(timestamp with time zone,integer)','EXECUTE')
        AND NOT has_function_privilege('qembed_runtime','public.list_expired_invocation_leases(integer)','EXECUTE')
        AND NOT has_function_privilege('qembed_runtime','public.list_pending_reconciliations(integer)','EXECUTE')
