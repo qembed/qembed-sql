@@ -1704,8 +1704,8 @@ BEGIN
   LOOP
     UPDATE budget_reservations SET status = 'Expired' WHERE id = r.id AND status = 'Reserved';
     UPDATE usage_counters
-       SET reserved_tokens = reserved_tokens - r.reserved_tokens,
-           reserved_cost_micros = reserved_cost_micros - r.reserved_cost_micros
+       SET reserved_tokens = greatest(0, reserved_tokens - r.reserved_tokens),
+           reserved_cost_micros = greatest(0, reserved_cost_micros - r.reserved_cost_micros)
      WHERE tenant_id = r.tenant_id AND object_id = r.object_id
        AND usage_date = r.usage_date AND pool = r.pool;
     -- r3 (R3-04): per-caller reserved tokens were never released on expiry

@@ -84,7 +84,8 @@ SELECT tt.try('RUST-041d seed a second invocation for pre-send cancellation', 'o
      0,'authenticated','Received',gen_random_uuid())
 $q$);
 SELECT tt.try('RUST-041d reserve usage for second invocation', 'ok', $q$
-  UPDATE usage_counters SET reserved_tokens=reserved_tokens+25
+  UPDATE usage_counters SET reserved_tokens=reserved_tokens+25,
+       reserved_cost_micros=reserved_cost_micros+7
    WHERE tenant_id=current_setting('app.tenant_id')::uuid
      AND object_id='0b000000-0000-0000-0000-000000000001'
      AND usage_date=current_date AND pool='authenticated';
@@ -101,7 +102,7 @@ SELECT tt.try('RUST-041d reserve usage for second invocation', 'ok', $q$
      current_setting('app.tenant_id')::uuid,
      '0b000000-0000-0000-0000-000000000001',
      '1a000000-0000-0000-0000-00000000000c',
-     'authenticated',current_date,25,0,'Reserved',now()-interval '1 minute')
+     'authenticated',current_date,25,7,'Reserved',now()-interval '1 minute')
 $q$);
 SELECT tt.try('RUST-041d cancellation before send is durable', 'ok', $q$
   UPDATE provider_call_attempts
@@ -109,11 +110,21 @@ SELECT tt.try('RUST-041d cancellation before send is durable', 'ok', $q$
    WHERE tenant_id=current_setting('app.tenant_id')::uuid
      AND invocation_id='1a000000-0000-0000-0000-00000000000c'
 $q$);
+-- Simulate accounting drift: the reservation still exists, but aggregate counters
+-- are lower than its release amount. The sweeper must not abort the batch.
+UPDATE usage_counters SET reserved_tokens=0, reserved_cost_micros=0
+ WHERE tenant_id=current_setting('app.tenant_id')::uuid
+   AND object_id='0b000000-0000-0000-0000-000000000001'
+   AND usage_date=current_date AND pool='authenticated';
+UPDATE caller_usage_counters SET reserved_tokens=0
+ WHERE tenant_id=current_setting('app.tenant_id')::uuid
+   AND object_id='0b000000-0000-0000-0000-000000000001'
+   AND caller_id='ca000000-0000-0000-0000-000000000001'
+   AND usage_date=current_date;
 RESET ROLE;
 SET ROLE qembed_worker;
-SELECT tt.try('RUST-041d worker sweeper expires a cancelled-before-send reservation', 'ok', $q$
-  SELECT sweep_expired_reservations(100)
-$q$);
+SELECT tt.chk('QSA-010 worker sweeper expires drifted reservation without aborting',
+  $q$SELECT sweep_expired_reservations(100)=1$q$);
 RESET ROLE;
 SET ROLE qembed_runtime;
 SELECT tt.chk('RUST-041d pre-send cancellation releases only its reservation',
@@ -122,5 +133,13 @@ SELECT tt.chk('RUST-041d pre-send cancellation releases only its reservation',
        JOIN provider_call_attempts pca USING (tenant_id,object_id,invocation_id)
       WHERE br.tenant_id=current_setting('app.tenant_id')::uuid
         AND br.invocation_id='1a000000-0000-0000-0000-00000000000c'$q$);
+SELECT tt.chk('QSA-010 counter drift clamps aggregate and Caller counters at zero',
+  $q$SELECT u.reserved_tokens=0 AND u.reserved_cost_micros=0 AND c.reserved_tokens=0
+       FROM usage_counters u JOIN caller_usage_counters c
+         ON c.tenant_id=u.tenant_id AND c.object_id=u.object_id AND c.usage_date=u.usage_date
+      WHERE u.tenant_id=current_setting('app.tenant_id')::uuid
+        AND u.object_id='0b000000-0000-0000-0000-000000000001'
+        AND u.usage_date=current_date AND u.pool='authenticated'
+        AND c.caller_id='ca000000-0000-0000-0000-000000000001'$q$);
 
 RESET ROLE;

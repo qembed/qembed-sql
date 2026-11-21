@@ -4,7 +4,7 @@
 **Status:** Active; audit findings require revalidation against current `master`  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
-**Roadmap branch base:** `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`  
+**Roadmap branch base:** `495602a20a0bfb25873da856e2537c1a35da0d40`  
 **Validation target:** PostgreSQL 19 + pgvector 0.8.7  
 **Rule:** No finding is closed by documentation, code inspection alone, or a green legacy smoke suite. Closure requires a regression test that fails before the fix and passes after it, plus recorded validation evidence.
 
@@ -212,7 +212,7 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-009 — Require a lease for Executing ToolExecution rows
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `NOT_REPRODUCED` — current DDL already enforces the invariant through combined checks: `(status = 'Executing') = (lease_owner IS NOT NULL)` and `(lease_owner IS NULL) = (lease_until IS NULL)`. Together they imply `Executing => lease_until IS NOT NULL`. A direct runtime transition test is added in [PR #39](https://github.com/qembed/qembed-sql/pull/39).
+**Current status:** `NOT_REPRODUCED` — current DDL already enforces the invariant through combined checks: `(status = 'Executing') = (lease_owner IS NOT NULL)` and `(lease_owner IS NULL) = (lease_until IS NULL)`. Together they imply `Executing => lease_until IS NOT NULL`. A direct runtime transition test was added in [PR #39](https://github.com/qembed/qembed-sql/pull/39), merged as `495602a20a0bfb25873da856e2537c1a35da0d40`; PostgreSQL 19 / pgvector 0.8.7 smoke passed 420/420 on PR head.
 
 - [x] Inspect the current ToolExecution status/lease CHECK constraints and transition guard.
 - [x] Add a negative transition test proving an Executing row cannot omit `lease_until`.
@@ -223,7 +223,7 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-010 — Make reservation sweeper robust against counter drift
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `REVALIDATE`
+**Current status:** `IN_PROGRESS` — remediation is [PR #42](https://github.com/qembed/qembed-sql/pull/42). Aggregate token and cost counters are clamped at zero on expiry; a regression test simulates drift below the reservation amount and requires the worker batch to complete.
 
 - [ ] Inspect current `usage_counters` and `caller_usage_counters` release logic.
 - [ ] Decide whether counters must fail closed on drift or clamp at zero; do not hide accounting corruption without an explicit invariant.
@@ -332,8 +332,8 @@ Every remediation PR must include:
 | QSA-006 | PR #35; 416/416 PR-head and post-merge | [PR #35](https://github.com/qembed/qembed-sql/pull/35) | 416/416 | VERIFIED |
 | QSA-007 | PR #30; 400/400 PR-head and post-merge | [PR #30](https://github.com/qembed/qembed-sql/pull/30) | 400/400 | VERIFIED |
 | QSA-008 | Future principal/memory model; no current Rust memory write adapter | — | N/A | DEFERRED_TO_FUTURE_FEATURE |
-| QSA-009 | Combined CHECK constraints imply Executing has lease_until; negative test in PR #39 | [PR #39](https://github.com/qembed/qembed-sql/pull/39) | Pending | NOT_REPRODUCED |
-| QSA-010 | Pending | — | Pending | REVALIDATE |
+| QSA-009 | Combined CHECK constraints; runtime negative test PR #39; 420/420 | [PR #39](https://github.com/qembed/qembed-sql/pull/39) | 420/420 | NOT_REPRODUCED |
+| QSA-010 | Counter underflow clamp and drift regression test in PR #42 | [PR #40](https://github.com/qembed/qembed-sql/pull/40) | Pending | IN_PROGRESS |
 | QSA-011 | PR #36; 418/418 PR-head and post-merge | [PR #36](https://github.com/qembed/qembed-sql/pull/36) | 418/418 | VERIFIED |
 | QSA-012 | ADR RUST-044 assigns exact-byte dedup check to Rust; read-time corruption test pending | — | Pending | DEFERRED_TO_RUST |
 | QSA-013–018 | Pending | — | Pending | REVALIDATE |
@@ -350,6 +350,6 @@ The initial findings were supplied from an adversarial audit of commit `164da3c`
 - QSA-013 through QSA-018 were reported as minor observations.
 - QSA-019 through QSA-023 were catalog-based performance observations, not measured.
 
-The current repository base for this roadmap is `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`. QSA-001, QSA-002, and QSA-007 have since been remediated and independently re-run through the PostgreSQL 19 / pgvector 0.8.7 smoke workflow. Remaining findings still require revalidation against this exact base before remediation. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
+The current repository base for this roadmap is `495602a20a0bfb25873da856e2537c1a35da0d40`. QSA-001, QSA-002, and QSA-007 have since been remediated and independently re-run through the PostgreSQL 19 / pgvector 0.8.7 smoke workflow. Remaining findings still require revalidation against this exact base before remediation. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
 
 This roadmap records the remediation program; it does not itself certify the schema as secure or production-ready.
