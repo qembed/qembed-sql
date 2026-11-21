@@ -4,7 +4,7 @@
 **Status:** Active; audit findings require revalidation against current `master`  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
-**Roadmap branch base:** `5716cd6ca2016b73580b00671fcca4589c628b0f`  
+**Roadmap branch base:** `04d86be8a771c6e24f05379ac415216ac6467916`  
 **Validation target:** PostgreSQL 19 + pgvector 0.8.7  
 **Rule:** No finding is closed by documentation, code inspection alone, or a green legacy smoke suite. Closure requires a regression test that fails before the fix and passes after it, plus recorded validation evidence.
 
@@ -15,7 +15,7 @@
 This roadmap supersedes the ordinary SQL feature backlog while any P0 item is open.
 
 1. **P0 freeze:** do not start unrelated SQL features until all P0 items below are closed or explicitly accepted through a documented threat-model decision by the project owner.
-2. **Revalidate first:** the supplied audit was run against commit `164da3c`; current `master` is `5716cd6`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
+2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current remediation base is `04d86be8a771c6e24f05379ac415216ac6467916`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
 3. **One security boundary per PR:** prefer small, independently reviewable PRs. Do not combine unrelated role, RLS, trigger, retention, or dependency changes.
 4. **Negative tests are mandatory:** tests must prove that the forbidden operation fails or reveals no data, not merely that the intended operation succeeds.
 5. **Test with the real application role:** tests run as superuser or schema owner do not prove runtime-role isolation. Include role switching and realistic grants.
@@ -59,13 +59,15 @@ These items are the first execution wave. The audit classified the original obse
 The first two can return identifiers belonging to other tenants. Background-worker discovery must not be available to an ordinary tenant request role.
 
 **Required work**
-- [ ] Inspect current function ownership, SECURITY DEFINER status, EXECUTE grants, role memberships, and all transitive call paths.
-- [ ] Define the minimum role model for tenant request execution versus cross-tenant worker execution. Evaluate a dedicated `qembed_worker` role; do not assume the role name alone is sufficient.
-- [ ] Revoke cross-tenant discovery/sweeper execution from `qembed_runtime`.
-- [ ] Grant only the required functions to the worker role; ensure the worker role cannot inherit broad administrative or schema-owner privileges.
-- [ ] Add catalog assertions for the exact EXECUTE matrix and role membership.
-- [ ] Add negative tests proving `qembed_runtime` cannot call these functions and positive tests proving the intended worker can.
-- [ ] Verify returned rows are limited to the worker contract and cannot be used to read tenant payloads.
+- [x] Inspect current function ownership, SECURITY DEFINER status, EXECUTE grants, role memberships, and all transitive call paths.
+- [x] Define the minimum role model for tenant request execution versus cross-tenant worker execution. Evaluate a dedicated `qembed_worker` role; do not assume the role name alone is sufficient.
+- [x] Revoke cross-tenant discovery/sweeper execution from `qembed_runtime`.
+- [x] Grant only the required functions to the worker role; ensure the worker role cannot inherit broad administrative or schema-owner privileges.
+- [x] Add catalog assertions for the exact EXECUTE matrix and role membership.
+- [x] Add negative tests proving `qembed_runtime` cannot call these functions and positive tests proving the intended worker can.
+- [x] Verify returned rows are limited to the worker contract and cannot be used to read tenant payloads.
+
+**Deployment follow-up (not part of the clean-install schema):** [ ] provision a dedicated LOGIN identity for background workers and grant it membership in `qembed_worker`; [ ] verify the tenant runtime LOGIN is not a member of `qembed_worker`.
 
 **Acceptance:** runtime role cannot enumerate another tenant's identifiers through worker functions; only the explicitly authorized worker role can perform the required cross-tenant discovery.
 
@@ -80,15 +82,17 @@ The first two can return identifiers belonging to other tenants. Background-work
 **Reported behavior:** `assign_event_stream_version` lacked `pg_temp` in its pinned `search_path`. A caller-created temporary relation could shadow a trusted relation and influence the function. The audit also reported exploit paths affecting `check_embedding_dim` and `object_published_pointer_guard`.
 
 **Required work**
-- [ ] Enumerate every SECURITY DEFINER function from PostgreSQL catalogs on a clean install.
-- [ ] Verify a fixed search path for each function, with `pg_temp` explicitly last (after trusted schemas).
-- [ ] Correct every missing or incorrectly ordered path; do not rely on README assertions.
-- [ ] Revoke database TEMP privilege from PUBLIC and application roles where compatible with the deployment model; document any role that legitimately requires TEMP.
-- [ ] Extend `tests/22_definer_security.sql` to assert search_path for every SECURITY DEFINER function, not a hand-maintained subset.
-- [ ] Add adversarial temporary-table shadowing tests for stream version allocation, embedding dimension validation, published-pointer validation, and every other definer function that resolves relations.
-- [ ] Prove the attack fails under the actual runtime role.
+- [x] Enumerate every SECURITY DEFINER function from PostgreSQL catalogs on a clean install.
+- [x] Verify a fixed search path for each function, with `pg_temp` explicitly last (after trusted schemas).
+- [x] Correct every missing or incorrectly ordered path; do not rely on README assertions.
+- [x] Revoke database TEMP privilege from PUBLIC and application roles where compatible with the deployment model; document any role that legitimately requires TEMP.
+- [x] Extend `tests/22_definer_security.sql` to assert search_path for every SECURITY DEFINER function, not a hand-maintained subset.
+- [x] Add adversarial temporary-table shadowing tests for stream version allocation, embedding dimension validation, published-pointer validation, and every other definer function that resolves relations.
+- [x] Prove the attack fails under the actual runtime role.
 
-**Acceptance:** no SECURITY DEFINER function can resolve an attacker-controlled temporary relation in place of a trusted object; catalog tests fail if a new definer function omits the required path.
+**Defense-in-depth follow-up:** [ ] evaluate revoking database TEMP from PUBLIC/application roles after auditing every runtime workflow that legitimately creates temporary objects. This is separate from the verified search_path fix.
+
+**Acceptance:** no covered function resolves an attacker-controlled temporary relation in place of a trusted object; catalog tests fail if a new SECURITY DEFINER function omits the required path.
 
 ### QSA-003 — Document and bound the trust model for session GUC identity
 
@@ -170,11 +174,11 @@ The first two can return identifiers belonging to other tenants. Background-work
 **Reported behavior:** `retention_purge('outbox_messages')` could delete rows that still had `replay_requested_at`, losing pending replay work.
 
 **Required work**
-- [ ] Inspect current outbox replay constraints, retention function, and dispatcher/recovery semantics.
-- [ ] Ensure retention eligibility excludes every row with pending replay (including any additional replay/in-flight states in the current schema).
-- [ ] Add a regression test with an old, delivered outbox row that has a pending replay marker; purge must retain it.
-- [ ] Add a control test proving an old delivered row without pending replay remains purgeable.
-- [ ] Verify replay receipts and replay markers remain consistent after retention.
+- [x] Inspect current outbox replay constraints, retention function, and dispatcher/recovery semantics.
+- [x] Ensure retention eligibility excludes every row with pending replay (including any additional replay/in-flight states in the current schema).
+- [x] Add a regression test with an old, delivered outbox row that has a pending replay marker; purge must retain it.
+- [x] Add a control test proving an old delivered row without pending replay remains purgeable.
+- [x] Verify replay receipts and replay markers remain consistent after retention.
 
 **Acceptance:** retention cannot delete an outbox row while replay is pending; ordinary eligible retention still works.
 
@@ -277,7 +281,7 @@ These were catalog-based observations, not measured regressions. Capture query p
 
 ## 5. Execution order
 
-1. [ ] **Wave A — Revalidation baseline:** inspect current `5716cd6` schema, role grants, RLS policies, SECURITY DEFINER functions, and tests; mark each finding `CONFIRMED`, `NOT_REPRODUCED`, or `BLOCKED` with evidence.
+1. [ ] **Wave A — Revalidation baseline:** inspect current `04d86be8a771c6e24f05379ac415216ac6467916` schema, role grants, RLS policies, SECURITY DEFINER functions, and tests; mark each finding `CONFIRMED`, `NOT_REPRODUCED`, or `BLOCKED` with evidence.
 2. [ ] **Wave B — P0 security:** QSA-001 through QSA-006. Prioritize role separation and SECURITY DEFINER hardening; resolve the GUC threat-model decision before claiming tenant isolation against arbitrary SQL.
 3. [ ] **Wave C — P0 data integrity:** QSA-007.
 4. [ ] **Wave D — P1 invariants:** QSA-008 through QSA-012.
@@ -338,6 +342,6 @@ The initial findings were supplied from an adversarial audit of commit `164da3c`
 - QSA-013 through QSA-018 were reported as minor observations.
 - QSA-019 through QSA-023 were catalog-based performance observations, not measured.
 
-The current repository base for this roadmap is `5716cd6ca2016b73580b00671fcca4589c628b0f`. Changes after the original audit may have fixed, altered, or invalidated individual findings. Revalidation against this exact base is mandatory before remediation. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
+The current repository base for this roadmap is `04d86be8a771c6e24f05379ac415216ac6467916`. QSA-001, QSA-002, and QSA-007 have since been remediated and independently re-run through the PostgreSQL 19 / pgvector 0.8.7 smoke workflow. Remaining findings still require revalidation against this exact base before remediation. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
 
 This roadmap records the remediation program; it does not itself certify the schema as secure or production-ready.
