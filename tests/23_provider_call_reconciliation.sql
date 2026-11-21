@@ -25,9 +25,13 @@ SELECT tt.try('RUST-041d ambiguous outcome cannot be reset to NotStarted', 'err'
    WHERE tenant_id=current_setting('app.tenant_id')::uuid
      AND invocation_id='1a000000-0000-0000-0000-000000000001'
 $q$);
-SELECT tt.try('RUST-041d expiry sweeper executes with ambiguous reservation present', 'ok', $q$
+RESET ROLE;
+SET ROLE qembed_worker;
+SELECT tt.try('RUST-041d worker expiry sweeper executes with ambiguous reservation present', 'ok', $q$
   SELECT sweep_expired_reservations(100)
 $q$);
+RESET ROLE;
+SET ROLE qembed_runtime;
 SELECT tt.chk('RUST-041d sweeper retains possibly-sent reservation',
   $q$SELECT br.status='Reserved' AND pca.state='OutcomeUnknown'
        FROM budget_reservations br
@@ -105,9 +109,13 @@ SELECT tt.try('RUST-041d cancellation before send is durable', 'ok', $q$
    WHERE tenant_id=current_setting('app.tenant_id')::uuid
      AND invocation_id='1a000000-0000-0000-0000-00000000000c'
 $q$);
-SELECT tt.try('RUST-041d sweeper expires a cancelled-before-send reservation', 'ok', $q$
+RESET ROLE;
+SET ROLE qembed_worker;
+SELECT tt.try('RUST-041d worker sweeper expires a cancelled-before-send reservation', 'ok', $q$
   SELECT sweep_expired_reservations(100)
 $q$);
+RESET ROLE;
+SET ROLE qembed_runtime;
 SELECT tt.chk('RUST-041d pre-send cancellation releases only its reservation',
   $q$SELECT br.status='Expired' AND pca.state='CancelledBeforeSend'
        FROM budget_reservations br

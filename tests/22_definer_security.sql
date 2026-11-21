@@ -89,6 +89,12 @@ SELECT tt.try('AUDIT-010 runtime cannot create objects in SECURITY DEFINER searc
   $q$CREATE FUNCTION public.audit010_shadow() RETURNS integer LANGUAGE sql AS 'SELECT 1'$q$);
 SELECT tt.try('AUDIT-010 runtime cannot execute retention_purge', 'err',
   $q$SELECT retention_purge('interaction_messages',now(),'runtime')$q$);
+SELECT tt.try('QSA-001 runtime cannot enumerate expired leases across tenants','err',
+  $q$SELECT * FROM list_expired_invocation_leases(0)$q$);
+SELECT tt.try('QSA-001 runtime cannot enumerate pending reconciliations across tenants','err',
+  $q$SELECT * FROM list_pending_reconciliations(0)$q$);
+SELECT tt.try('QSA-001 runtime cannot sweep cross-tenant reservations','err',
+  $q$SELECT sweep_expired_reservations(0)$q$);
 RESET ROLE;
 
 SET ROLE qembed_admin;
@@ -101,6 +107,30 @@ RESET ROLE;
 SET ROLE qembed_dispatcher;
 SELECT tt.try('AUDIT-010 dispatcher cannot execute cross-tenant discovery', 'err',
   $q$SELECT * FROM list_expired_invocation_leases(1)$q$);
+RESET ROLE;
+SET ROLE qembed_worker;
+SELECT tt.chk('QSA-001 worker role is isolated and has only worker entry points',
+  $q$SELECT NOT rolcanlogin AND NOT rolsuper AND NOT rolbypassrls
+       AND NOT pg_has_role('qembed_worker','qembed_definer','MEMBER')
+       AND has_function_privilege('qembed_worker','public.list_expired_invocation_leases(integer)','EXECUTE')
+       AND has_function_privilege('qembed_worker','public.list_pending_reconciliations(integer)','EXECUTE')
+       AND has_function_privilege('qembed_worker','public.sweep_expired_reservations(integer)','EXECUTE')
+       AND NOT has_function_privilege('qembed_worker','public.retention_purge(text,timestamptz,text)','EXECUTE')
+       AND NOT has_function_privilege('qembed_worker','public.authenticate_principal(bytea)','EXECUTE')
+       AND NOT has_function_privilege('qembed_worker','public.grant_caller_delegation(uuid)','EXECUTE')
+       AND NOT has_function_privilege('qembed_worker','public.resolve_delegated_caller(uuid)','EXECUTE')
+       FROM pg_roles WHERE rolname='qembed_worker'$q$);
+SELECT tt.chk('QSA-001 worker has no direct tenant data table access',
+  $q$SELECT NOT has_table_privilege('qembed_worker','public.object_invocations','SELECT')
+       AND NOT has_table_privilege('qembed_worker','public.tool_executions','SELECT')
+       AND NOT has_table_privilege('qembed_worker','public.budget_reservations','SELECT')
+       AND NOT has_table_privilege('qembed_worker','public.usage_counters','UPDATE')$q$);
+SELECT tt.try('QSA-001 worker can call expired-lease discovery','ok',
+  $q$SELECT count(*) FROM list_expired_invocation_leases(0)$q$);
+SELECT tt.try('QSA-001 worker can call reconciliation discovery','ok',
+  $q$SELECT count(*) FROM list_pending_reconciliations(0)$q$);
+SELECT tt.try('QSA-001 worker can call reservation sweeper','ok',
+  $q$SELECT sweep_expired_reservations(0)$q$);
 RESET ROLE;
 
 SET ROLE qembed_retention;
@@ -128,7 +158,9 @@ SELECT tt.chk('AUDIT-010 no application role is a member of definer',
   $q$SELECT NOT pg_has_role('qembed_runtime','qembed_definer','MEMBER')
         AND NOT pg_has_role('qembed_dispatcher','qembed_definer','MEMBER')
         AND NOT pg_has_role('qembed_admin','qembed_definer','MEMBER')
-        AND NOT pg_has_role('qembed_retention','qembed_definer','MEMBER')$q$);
+        AND NOT pg_has_role('qembed_retention','qembed_definer','MEMBER')
+        AND NOT pg_has_role('qembed_worker','qembed_definer','MEMBER')
+        AND NOT pg_has_role('qembed_runtime','qembed_worker','MEMBER')$q$);
 
 SELECT tt.chk('AUDIT-010 event stream allocator is an isolated definer trigger',
   $q$SELECT pg_get_userbyid(proowner)='qembed_event_allocator'
@@ -171,16 +203,17 @@ SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PU
                          'list_expired_invocation_leases','list_pending_reconciliations',
                          'sweep_expired_reservations','retention_purge')$q$);
 
-SELECT tt.chk('AUDIT-010 runtime has only its eight operational definer entry points',
+SELECT tt.chk('QSA-001 runtime has only tenant-scoped operational definer entry points',
   $q$SELECT
        has_function_privilege('qembed_runtime','public.authenticate_principal(bytea)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.grant_caller_delegation(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.revoke_caller_delegation(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.resolve_delegated_caller(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.resolve_object_tenant(uuid)','EXECUTE')
-       AND has_function_privilege('qembed_runtime','public.list_expired_invocation_leases(integer)','EXECUTE')
-       AND has_function_privilege('qembed_runtime','public.list_pending_reconciliations(integer)','EXECUTE')
-       AND has_function_privilege('qembed_runtime','public.sweep_expired_reservations(integer)','EXECUTE')
+       AND has_function_privilege('qembed_runtime','public.sweep_stale_invocation_deliveries(timestamp with time zone,integer)','EXECUTE')
+       AND NOT has_function_privilege('qembed_runtime','public.list_expired_invocation_leases(integer)','EXECUTE')
+       AND NOT has_function_privilege('qembed_runtime','public.list_pending_reconciliations(integer)','EXECUTE')
+       AND NOT has_function_privilege('qembed_runtime','public.sweep_expired_reservations(integer)','EXECUTE')
        AND NOT has_function_privilege('qembed_runtime','public.retention_purge(text,timestamptz,text)','EXECUTE')$q$);
 SELECT tt.chk('AUDIT-010 retention has only the purge entry point',
   $q$SELECT has_function_privilege('qembed_retention','public.retention_purge(text,timestamptz,text)','EXECUTE')

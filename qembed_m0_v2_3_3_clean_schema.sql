@@ -38,7 +38,7 @@ DO $$
 DECLARE r TEXT;
 BEGIN
   FOREACH r IN ARRAY ARRAY['qembed_runtime','qembed_dispatcher','qembed_admin',
-                           'qembed_retention','qembed_definer','qembed_event_allocator']
+                           'qembed_retention','qembed_definer','qembed_event_allocator','qembed_worker']
   LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
       EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS', r);
@@ -46,15 +46,18 @@ BEGIN
   END LOOP;
 END $$;
 ALTER ROLE qembed_event_allocator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-GRANT USAGE ON SCHEMA public TO qembed_event_allocator;
+ALTER ROLE qembed_worker NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+GRANT USAGE ON SCHEMA public TO qembed_event_allocator, qembed_worker;
 -- qembed_definer: NOLOGIN owner of SECURITY DEFINER functions (A2). Subject to
 -- RLS; sees data only through explicit policies defined in section 20.
 
 -- SECURITY DEFINER functions use this schema in their fixed search_path.
 -- Application and PUBLIC roles must never be able to shadow objects there.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer, qembed_event_allocator;
-REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM qembed_event_allocator;
+REVOKE CREATE ON SCHEMA public FROM qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_definer, qembed_event_allocator, qembed_worker;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM qembed_event_allocator, qembed_worker;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM qembed_worker;
+REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM qembed_worker;
 
 -- -----------------------------------------------------------------------------
 -- 1. Guards
@@ -1738,7 +1741,7 @@ BEGIN
 END $$;
 
 -- ownership: functions must be owned by qembed_definer
-DO $$
+DO $qsa001_ownership$
 DECLARE f TEXT;
 BEGIN
   FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid)',
@@ -1748,7 +1751,11 @@ BEGIN
     EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
   END LOOP;
-END $$;
+END $qsa001_ownership$;
+
+-- Remove any inherited or pre-existing function grants before adding the
+-- worker's narrow allowlist below.
+REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM qembed_worker;
 
 -- -----------------------------------------------------------------------------
 -- 17. Grants (least privilege)
@@ -1777,9 +1784,15 @@ GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddin
 GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid),
   revoke_caller_delegation(uuid), resolve_delegated_caller(uuid), resolve_object_tenant(uuid),
-  list_expired_invocation_leases(integer), list_pending_reconciliations(integer),
-  sweep_expired_reservations(integer),
   sweep_stale_invocation_deliveries(timestamptz,integer) TO qembed_runtime;
+
+-- Cross-tenant discovery and global reservation expiry are worker-only.
+REVOKE ALL ON FUNCTION list_expired_invocation_leases(integer),
+  list_pending_reconciliations(integer), sweep_expired_reservations(integer)
+  FROM PUBLIC, qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention;
+GRANT EXECUTE ON FUNCTION list_expired_invocation_leases(integer),
+  list_pending_reconciliations(integer), sweep_expired_reservations(integer)
+  TO qembed_worker;
 
 -- dispatcher: only the delivery projection; no event log or event_id access.
 REVOKE SELECT ON events FROM qembed_dispatcher;
