@@ -779,6 +779,12 @@ CREATE TABLE memory_conflicts (
   FOREIGN KEY (tenant_id, object_id, memory_id) REFERENCES memories(tenant_id, object_id, id) ON DELETE CASCADE,
   FOREIGN KEY (tenant_id, object_id, conflicting_memory_id) REFERENCES memories(tenant_id, object_id, id) ON DELETE CASCADE
 );
+-- Each memory-reference FK cascades in its own direction; both child-side lookups
+-- need an index to avoid scanning the complete conflict graph on memory deletion.
+CREATE INDEX idx_memory_conflicts_memory
+  ON memory_conflicts (tenant_id, object_id, memory_id);
+CREATE INDEX idx_memory_conflicts_conflicting_memory
+  ON memory_conflicts (tenant_id, object_id, conflicting_memory_id);
 
 CREATE TABLE memory_embeddings (
   tenant_id UUID NOT NULL, object_id UUID NOT NULL, memory_id UUID NOT NULL,
