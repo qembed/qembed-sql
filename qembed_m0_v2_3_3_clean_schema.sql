@@ -456,6 +456,9 @@ CREATE TABLE object_invocations (
   id UUID PRIMARY KEY, tenant_id UUID NOT NULL, object_id UUID NOT NULL, caller_id UUID NOT NULL,
   snapshot_id UUID NOT NULL, knowledge_revision BIGINT NOT NULL CHECK (knowledge_revision >= 0),
   pool TEXT NOT NULL CHECK (pool IN ('anonymous','authenticated')),
+  -- WaitingForInput and WaitingForApproval are reserved for the M4 autonomous
+  -- runtime. They remain in the persisted vocabulary but are intentionally not
+  -- reachable until the Rust lifecycle contract implements their transitions.
   status TEXT NOT NULL CHECK (status IN
     ('Received','ContextLoading','Processing','ExecutingTool','Verifying',
      'WaitingForInput','WaitingForApproval',
