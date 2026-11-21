@@ -197,9 +197,7 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-008 — Reconcile verified-memory principal foreign keys with the Rust auth model
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `VERIFIED` — merged in [PR #36](https://github.com/qembed/qembed-sql/pull/36), commit `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`. PostgreSQL 19 / pgvector 0.8.7 smoke suite passed 418/418 on the PR head and again post-merge.
-
-**Implementation:** the schema now rejects pgvector below 0.8.7, compares numeric major/minor/patch components, and has no session-GUC override.
+**Current status:** `SOURCE_CONFIRMED` — current schema's verified-memory guard and foreign key reference `principals`, while the Rust authentication path writes `owner_principals`. This remains a cross-repository contract question; no DDL change is made until the intended Principal relation is confirmed.
 
 - [ ] Trace `memories_verified_guard`, its FK targets, and every Rust/SQL write path for Principal identity.
 - [ ] Determine whether `principals` and `owner_principals` intentionally represent distinct identities or whether this is a broken integration.
@@ -235,7 +233,7 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-011 — Enforce pgvector minimum version 0.8.7 including patch comparison
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `REVALIDATE`
+**Current status:** `VERIFIED` — merged in [PR #36](https://github.com/qembed/qembed-sql/pull/36), commit `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`. PostgreSQL 19 / pgvector 0.8.7 smoke suite passed 418/418 on the PR head and again post-merge.
 
 - [ ] Inspect the actual extension-version gate and CI matrix.
 - [ ] Reject pgvector versions below 0.8.7, including earlier 0.8.x patch releases.
@@ -331,7 +329,7 @@ Every remediation PR must include:
 | QSA-005 | PR #31; 404/404 PR-head and post-merge | [PR #31](https://github.com/qembed/qembed-sql/pull/31) | 404/404 | VERIFIED |
 | QSA-006 | PR #35; 416/416 PR-head and post-merge | [PR #35](https://github.com/qembed/qembed-sql/pull/35) | 416/416 | VERIFIED |
 | QSA-007 | PR #30; 400/400 PR-head and post-merge | [PR #30](https://github.com/qembed/qembed-sql/pull/30) | 400/400 | VERIFIED |
-| QSA-008 | Pending | — | Pending | REVALIDATE |
+| QSA-008 | Source-confirmed: verified-memory FK targets `principals` | — | Pending | SOURCE_CONFIRMED |
 | QSA-009 | Pending | — | Pending | REVALIDATE |
 | QSA-010 | Pending | — | Pending | REVALIDATE |
 | QSA-011 | PR #36; 418/418 PR-head and post-merge | [PR #36](https://github.com/qembed/qembed-sql/pull/36) | 418/418 | VERIFIED |
