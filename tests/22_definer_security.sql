@@ -183,6 +183,12 @@ SELECT tt.chk('QSA-002 every SECURITY DEFINER function pins pg_temp last',
        proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp'])
        FROM pg_proc p
        WHERE pronamespace='public'::regnamespace AND prosecdef$q$);
+SELECT tt.chk('QSA-004 knowledge document sync is a pinned SECURITY DEFINER trigger',
+  $q$SELECT pg_get_userbyid(proowner)='qembed_definer' AND prosecdef
+       AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
+       AND NOT has_function_privilege('qembed_runtime','public.knowledge_documents_sync()','EXECUTE')
+       FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='knowledge_documents_sync'$q$);
+
 SELECT tt.chk('QSA-002 embedding and published-pointer trigger guards pin pg_temp last',
   $q$SELECT
        (SELECT proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
@@ -246,4 +252,10 @@ SELECT tt.chk('AUDIT-010 definer table grants remain least-privilege',
        AND has_table_privilege('qembed_definer','public.principal_caller_delegations','INSERT')
        AND has_table_privilege('qembed_definer','public.principal_caller_delegations','UPDATE')
        AND NOT has_table_privilege('qembed_definer','public.principal_caller_delegations','DELETE')
-       AND NOT has_table_privilege('qembed_definer','public.snapshots','SELECT')$q$);
+       AND NOT has_table_privilege('qembed_definer','public.snapshots','SELECT')
+       AND has_column_privilege('qembed_definer','public.knowledge_chunks','tenant_id','SELECT')
+       AND has_column_privilege('qembed_definer','public.knowledge_chunks','object_id','SELECT')
+       AND has_column_privilege('qembed_definer','public.knowledge_chunks','document_id','SELECT')
+       AND has_column_privilege('qembed_definer','public.knowledge_chunks','valid_from_revision','UPDATE')
+       AND has_column_privilege('qembed_definer','public.knowledge_chunks','valid_to_revision','UPDATE')
+       AND NOT has_column_privilege('qembed_definer','public.knowledge_chunks','content','UPDATE')$q$);
