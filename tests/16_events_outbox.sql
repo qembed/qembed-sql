@@ -53,13 +53,31 @@ SELECT tt.chk('RUST-052c replay_count default is exactly zero',
      WHERE d.adrelid='public.outbox_messages'::regclass
        AND a.attname='replay_count'$q$);
 
+-- Compare the deparsed CHECK expression against an independently declared expected
+-- expression. PostgreSQL canonicalizes both expressions before equality is tested.
+CREATE TEMP TABLE rust052c_expected_replay_constraint (
+  replay_requested_at TIMESTAMPTZ,
+  replay_reason TEXT,
+  delivered_at TIMESTAMPTZ,
+  CHECK (
+    (replay_requested_at IS NULL AND replay_reason IS NULL)
+    OR
+    (replay_requested_at IS NOT NULL
+      AND replay_reason = 'invocation_progress_deadline_expired'
+      AND delivered_at IS NOT NULL)
+  )
+);
+
 SELECT tt.chk('RUST-052c replay marker constraint is validated and exact',
- $q$SELECT convalidated
-        AND regexp_replace(pg_get_constraintdef(oid), '\s+', ' ', 'g')
-          = 'CHECK (((replay_requested_at IS NULL) AND (replay_reason IS NULL)) OR ((replay_requested_at IS NOT NULL) AND (replay_reason = ''invocation_progress_deadline_expired''::text) AND (delivered_at IS NOT NULL)))'
-      FROM pg_constraint
-     WHERE conrelid='public.outbox_messages'::regclass
-       AND conname='outbox_replay_marker_pair'$q$);
+ $q$SELECT actual.convalidated
+        AND pg_get_expr(actual.conbin,actual.conrelid)
+          = (SELECT pg_get_expr(expected.conbin,expected.conrelid)
+               FROM pg_constraint expected
+              WHERE expected.conrelid='pg_temp.rust052c_expected_replay_constraint'::regclass
+                AND expected.contype='c')
+      FROM pg_constraint actual
+     WHERE actual.conrelid='public.outbox_messages'::regclass
+       AND actual.conname='outbox_replay_marker_pair'$q$);
 
 SELECT tt.chk('RUST-052c replay index has exact keys, predicate and is valid',
  $q$SELECT i.indisvalid AND i.indisready AND NOT i.indisunique
