@@ -950,7 +950,7 @@ CREATE TABLE outbox_messages (
   CONSTRAINT outbox_publication_receipt_consistent CHECK (
     (delivered_at IS NULL AND publication_stream IS NULL AND publication_sequence IS NULL AND publication_duplicate IS NULL)
     OR
-    (delivered_at IS NOT NULL AND publication_stream IS NOT NULL AND publication_sequence > 0 AND publication_duplicate IS NOT NULL)
+    (delivered_at IS NOT NULL AND publication_stream IS NOT NULL AND publication_sequence IS NOT NULL AND publication_sequence > 0 AND publication_duplicate IS NOT NULL)
   ),
   UNIQUE (tenant_id, event_id),
   FOREIGN KEY (tenant_id, event_id)
