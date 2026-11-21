@@ -16,6 +16,31 @@ SELECT tt.try('AUDIT-009 new invocation must start Received', 'err', $q$
      0,'authenticated','Processing',gen_random_uuid())
 $q$);
 
+-- A fresh nonterminal row proves the transition guard, not terminal immutability,
+-- rejects the two states reserved for the M4 autonomous runtime.
+SELECT tt.try('AUDIT-013 seed invocation for reserved waiting-state checks', 'ok', $q$
+  INSERT INTO object_invocations
+    (id,tenant_id,object_id,caller_id,snapshot_id,knowledge_revision,pool,status,trace_id)
+  VALUES
+    ('a0130000-0000-0000-0000-000000000001',
+     current_setting('app.tenant_id')::uuid,
+     '0b000000-0000-0000-0000-000000000001',
+     'ca000000-0000-0000-0000-000000000001',
+     '5a000000-0000-0000-0000-000000000001',
+     0,'authenticated','Received',gen_random_uuid())
+$q$);
+SELECT tt.try('AUDIT-013 Received cannot enter reserved WaitingForInput', 'err', $q$
+  UPDATE object_invocations SET status='WaitingForInput', version=version+1
+   WHERE id='a0130000-0000-0000-0000-000000000001'
+$q$);
+SELECT tt.try('AUDIT-013 Received cannot enter reserved WaitingForApproval', 'err', $q$
+  UPDATE object_invocations SET status='WaitingForApproval', version=version+1
+   WHERE id='a0130000-0000-0000-0000-000000000001'
+$q$);
+SELECT tt.chk('AUDIT-013 rejected waiting transitions preserve Received checkpoint',
+  $q$SELECT status='Received' AND version=0 AND fencing_token=0
+        FROM object_invocations WHERE id='a0130000-0000-0000-0000-000000000001'$q$);
+
 SELECT tt.try('AUDIT-009 reject skipped Received -> Processing', 'err', $q$
   UPDATE object_invocations SET status='Processing', version=version+1
    WHERE id='1a000000-0000-0000-0000-000000000001'
@@ -126,15 +151,6 @@ SELECT tt.try('AUDIT-009 terminal invocation cannot be reopened', 'err', $q$
 $q$);
 
 
--- Reserved M4 states are deliberately not enterable in the current Rust state machine.
-SELECT tt.try('AUDIT-009 Received cannot enter WaitingForInput yet', 'err', $q$
-  UPDATE object_invocations SET status='WaitingForInput', version=version+1
-   WHERE id='1a000000-0000-0000-0000-000000000001'
-$q$);
-SELECT tt.try('AUDIT-009 Received cannot enter WaitingForApproval yet', 'err', $q$
-  UPDATE object_invocations SET status='WaitingForApproval', version=version+1
-   WHERE id='1a000000-0000-0000-0000-000000000001'
-$q$);
 
 SELECT tt.try('AUDIT-009 seed invocation for Failed terminal edge', 'ok', $q$
   INSERT INTO object_invocations
