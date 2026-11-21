@@ -1787,7 +1787,7 @@ GRANT SELECT (
 GRANT UPDATE (
   delivered_at, publication_stream, publication_sequence, publication_duplicate,
   lease_owner, lease_expires_at, claim_token, attempts,
-  replay_requested_at, replay_reason, replay_count
+  replay_requested_at, replay_reason
 ) ON outbox_messages TO qembed_dispatcher;
 REVOKE ALL PRIVILEGES ON outbox_publication_receipts FROM PUBLIC, qembed_runtime, qembed_dispatcher;
 GRANT INSERT ON outbox_publication_receipts TO qembed_dispatcher;

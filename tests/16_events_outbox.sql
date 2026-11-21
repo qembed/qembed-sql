@@ -33,20 +33,90 @@ SELECT tt.chk('RUST-051a outbox lease fencing columns and defaults exist',
    AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.outbox_messages'::regclass
      AND conname='outbox_delivered_unleased')$q$);
 
-SELECT tt.chk('RUST-052c durable replay marker and index exist', 
+-- RUST-052c: verify the durable replay schema as a physical contract, not by names alone.
+SELECT tt.chk('RUST-052c replay columns have exact types and nullability',
+ $q$SELECT array_agg(attname || ':' || format_type(atttypid,atttypmod) || ':' || attnotnull::text ORDER BY attname)
+      = ARRAY[
+        'replay_count:integer:true',
+        'replay_reason:text:false',
+        'replay_requested_at:timestamp with time zone:false'
+      ]::text[]
+    FROM pg_attribute
+   WHERE attrelid='public.outbox_messages'::regclass
+     AND attnum>0 AND NOT attisdropped
+     AND attname IN ('replay_requested_at','replay_reason','replay_count')$q$);
+
+SELECT tt.chk('RUST-052c replay_count default is exactly zero',
+ $q$SELECT pg_get_expr(d.adbin,d.adrelid)='0'
+      FROM pg_attrdef d
+      JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum
+     WHERE d.adrelid='public.outbox_messages'::regclass
+       AND a.attname='replay_count'$q$);
+
+-- Compare the deparsed CHECK expression against an independently declared expected
+-- expression. PostgreSQL canonicalizes both expressions before equality is tested.
+CREATE TEMP TABLE rust052c_expected_replay_constraint (
+  replay_requested_at TIMESTAMPTZ,
+  replay_reason TEXT,
+  delivered_at TIMESTAMPTZ,
+  CHECK (
+    (replay_requested_at IS NULL AND replay_reason IS NULL)
+    OR
+    (replay_requested_at IS NOT NULL
+      AND replay_reason = 'invocation_progress_deadline_expired'
+      AND delivered_at IS NOT NULL)
+  )
+);
+
+SELECT tt.chk('RUST-052c replay marker constraint is validated and exact',
+ $q$SELECT actual.convalidated
+        AND pg_get_expr(actual.conbin,actual.conrelid)
+          = (SELECT pg_get_expr(expected.conbin,expected.conrelid)
+               FROM pg_constraint expected
+              WHERE expected.conrelid='pg_temp.rust052c_expected_replay_constraint'::regclass
+                AND expected.contype='c')
+      FROM pg_constraint actual
+     WHERE actual.conrelid='public.outbox_messages'::regclass
+       AND actual.conname='outbox_replay_marker_pair'$q$);
+
+SELECT tt.chk('RUST-052c replay index has exact keys, predicate and is valid',
+ $q$SELECT i.indisvalid AND i.indisready AND NOT i.indisunique
+        AND pg_get_expr(i.indpred,i.indrelid)='(replay_requested_at IS NOT NULL)'
+        AND pg_get_indexdef(i.indexrelid)
+          = 'CREATE INDEX outbox_replay_requested_idx ON public.outbox_messages USING btree (replay_requested_at, created_at, delivery_id) WHERE (replay_requested_at IS NOT NULL)'
+      FROM pg_index i
+     WHERE i.indexrelid=to_regclass('public.outbox_replay_requested_idx')
+       AND i.indrelid='public.outbox_messages'::regclass$q$);
+
+SELECT tt.chk('RUST-052c recovery function is hardened SECURITY DEFINER',
+ $q$SELECT p.prosecdef
+        AND pg_get_userbyid(p.proowner)='qembed_definer'
+        AND p.proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
+        AND NOT has_function_privilege('public',p.oid,'EXECUTE')
+      FROM pg_proc p
+     WHERE p.oid=to_regprocedure('public.sweep_stale_invocation_deliveries(timestamptz,integer)')$q$);
+
+SELECT tt.chk('RUST-052c runtime alone can invoke the recovery function',
+ $q$SELECT has_function_privilege('qembed_runtime',f,'EXECUTE')
+        AND NOT has_function_privilege('qembed_retention',f,'EXECUTE')
+        AND NOT has_function_privilege('qembed_admin',f,'EXECUTE')
+        AND NOT has_function_privilege('qembed_dispatcher',f,'EXECUTE')
+        AND NOT has_function_privilege('public',f,'EXECUTE')
+      FROM (SELECT 'public.sweep_stale_invocation_deliveries(timestamptz,integer)'::regprocedure AS f) fn$q$);
+
+SELECT tt.chk('RUST-052c replay mutation privileges are split by responsibility',
  $q$SELECT
-   EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='replay_requested_at')
-   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='replay_reason')
-   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='replay_count' AND column_default LIKE '%0%')
-   AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.outbox_messages'::regclass AND conname='outbox_replay_marker_pair')
-   AND EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='outbox_replay_requested_idx')
-   AND to_regprocedure('public.sweep_stale_invocation_deliveries(timestamp with time zone,integer)') IS NOT NULL$q$);
-SELECT tt.chk('RUST-052c replay function is callable by runtime but its mutation stays definer-owned',
- $q$SELECT has_function_privilege('qembed_runtime','public.sweep_stale_invocation_deliveries(timestamptz,integer)','EXECUTE')
-   AND has_column_privilege('qembed_definer','public.outbox_messages','replay_requested_at','UPDATE')
-   AND has_column_privilege('qembed_definer','public.object_invocations','heartbeat_at','UPDATE')
-   AND has_column_privilege('qembed_dispatcher','public.outbox_messages','replay_requested_at','SELECT')
-   AND has_column_privilege('qembed_dispatcher','public.outbox_messages','replay_requested_at','UPDATE')$q$);
+        has_column_privilege('qembed_definer','public.outbox_messages','replay_requested_at','UPDATE')
+        AND has_column_privilege('qembed_definer','public.outbox_messages','replay_reason','UPDATE')
+        AND has_column_privilege('qembed_definer','public.outbox_messages','replay_count','UPDATE')
+        AND has_column_privilege('qembed_definer','public.object_invocations','heartbeat_at','UPDATE')
+        AND NOT has_column_privilege('qembed_runtime','public.outbox_messages','replay_requested_at','UPDATE')
+        AND has_column_privilege('qembed_dispatcher','public.outbox_messages','replay_requested_at','SELECT')
+        AND has_column_privilege('qembed_dispatcher','public.outbox_messages','replay_reason','SELECT')
+        AND has_column_privilege('qembed_dispatcher','public.outbox_messages','replay_count','SELECT')
+        AND has_column_privilege('qembed_dispatcher','public.outbox_messages','replay_requested_at','UPDATE')
+        AND has_column_privilege('qembed_dispatcher','public.outbox_messages','replay_reason','UPDATE')
+        AND NOT has_column_privilege('qembed_dispatcher','public.outbox_messages','replay_count','UPDATE')$q$);
 
 SELECT tt.chk('RUST-051b publication receipt columns and consistency constraint exist',
  $q$SELECT
