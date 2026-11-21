@@ -1025,6 +1025,13 @@ CREATE INDEX outbox_pending_idx
 CREATE INDEX outbox_replay_requested_idx
   ON outbox_messages (replay_requested_at, created_at, delivery_id)
   WHERE replay_requested_at IS NOT NULL;
+-- Supports the stale invocation recovery join while excluding already-replayed
+-- and not-yet-delivered outbox rows from the index.
+CREATE INDEX idx_outbox_invocation_recovery
+  ON outbox_messages (tenant_id, (payload->>'invocation_id'))
+  WHERE topic = 'invocation.received'
+    AND delivered_at IS NOT NULL
+    AND replay_requested_at IS NULL;
 
 -- Append-only history of durable transport acknowledgements. The Outbox row
 -- remains the source of truth; this ledger preserves every PubAck across replay.
