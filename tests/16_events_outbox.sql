@@ -8,7 +8,7 @@ SELECT tt.chk('AUDIT-005 events has exactly the Rust columns',
     FROM pg_attribute WHERE attrelid='public.events'::regclass AND attnum>0 AND NOT attisdropped$q$);
 SELECT tt.chk('AUDIT-005 outbox_messages has exactly the Rust columns',
  $q$SELECT string_agg(attname, ',' ORDER BY attnum)
-      = 'tenant_id,delivery_id,event_id,topic,payload,created_at,delivered_at'
+      = 'tenant_id,delivery_id,event_id,topic,payload,created_at,delivered_at,lease_owner,lease_expires_at,claim_token,attempts'
     FROM pg_attribute WHERE attrelid='public.outbox_messages'::regclass AND attnum>0 AND NOT attisdropped$q$);
 SELECT tt.chk('AUDIT-005 event aggregate ordering index exists',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
@@ -20,6 +20,18 @@ SELECT tt.chk('T-29 unique monotonic event stream key exists',
    AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%stream_version%')$q$);
 SELECT tt.chk('T-29 event stream counter is tenant RLS protected',
  $q$SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.event_stream_counters'::regclass$q$);
+
+SELECT tt.chk('RUST-051a outbox lease fencing columns and defaults exist',
+ $q$SELECT
+   (SELECT column_default LIKE '%0%' FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='claim_token')
+   AND
+   (SELECT column_default LIKE '%0%' FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='attempts')
+   AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.outbox_messages'::regclass
+     AND conname='outbox_messages_check')
+   AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.outbox_messages'::regclass
+     AND conname='outbox_messages_check1')$q$);
 
 SELECT tt.chk('AUDIT-005 pending outbox index matches delivered_at predicate',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
