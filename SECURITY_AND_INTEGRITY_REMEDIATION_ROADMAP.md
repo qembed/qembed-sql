@@ -1,10 +1,10 @@
 # QEmbed-SQL Security & Integrity Remediation Roadmap
 
 **Priority:** P0 — BLOCKER  
-**Status:** Active; source-level revalidation recorded against current `master` `719e73d490e5d2998ade8f5fc8a93f220390a0ef`; live reproduction and measured performance work remain explicitly tracked  
+**Status:** Active; source-level revalidation recorded against current `master` `407fd2090b63c7492ccebd4cba9e989df166abd3`; live reproduction and measured performance work remain explicitly tracked  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
-**Current revalidation baseline:** `719e73d490e5d2998ade8f5fc8a93f220390a0ef`  
+**Current revalidation baseline:** `407fd2090b63c7492ccebd4cba9e989df166abd3`  
 **Validation target:** PostgreSQL 19 + pgvector 0.8.7  
 **Rule:** No finding is closed by documentation, code inspection alone, or a green legacy smoke suite. Closure requires a regression test that fails before the fix and passes after it, plus recorded validation evidence.
 
@@ -15,7 +15,7 @@
 This roadmap supersedes the ordinary SQL feature backlog while any P0 item is open.
 
 1. **P0 freeze:** do not start unrelated SQL features until all P0 items below are closed or explicitly accepted through a documented threat-model decision by the project owner.
-2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current revalidation base is `719e73d490e5d2998ade8f5fc8a93f220390a0ef`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
+2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current revalidation base is `407fd2090b63c7492ccebd4cba9e989df166abd3`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
 3. **One security boundary per PR:** prefer small, independently reviewable PRs. Do not combine unrelated role, RLS, trigger, retention, or dependency changes.
 4. **Negative tests are mandatory:** tests must prove that the forbidden operation fails or reveals no data, not merely that the intended operation succeeds.
 5. **Test with the real application role:** tests run as superuser or schema owner do not prove runtime-role isolation. Include role switching and realistic grants.
@@ -268,17 +268,17 @@ These findings were inferred from DDL rather than reproduced in the original aud
 Revalidate all items against current schema before changing code.
 
 - [ ] **QSA-013 — Invocation waiting states** — `SOURCE_CONFIRMED` at schema level. The status CHECK admits `WaitingForInput` and `WaitingForApproval`, but the current `invocation_state_guard` transition matrix has no transition into either state; new rows must start `Received`. Decide whether these are reserved future states or dead vocabulary by comparing the Rust domain state machine and product contract. Do not remove them until that cross-repo contract check is complete.
-- [ ] **QSA-014 — Duplicate `object_versions_guard` definition** — `SOURCE_CONFIRMED` in source. The schema defines/replaces the same function twice (initial definition near line 223, final replacement near line 1961); the trigger is created once and the later `CREATE OR REPLACE` replaces the body for the same function object. This is source duplication, not two active triggers. Remove the obsolete earlier definition in a focused cleanup PR and assert the trigger points to the final function; no current double-trigger behavior was found.
-- [x] **QSA-015 — Empty-string receipt policy context** — `NOT_REPRODUCED` as an access-control bypass on current `master`. The policy casts the tenant GUC to UUID: unset context yields NULL and filters rows; an empty/malformed value raises a cast error, not an authorization bypass. More importantly, `qembed_runtime` has no privileges on `outbox_publication_receipts`; the dispatcher has INSERT only. Optional `NULLIF` normalization and catalog regression assertions may improve predictable error behavior, but this is not a current tenant-data exposure.
+- [x] **QSA-014 — Duplicate `object_versions_guard` definition** — `VERIFIED` in [PR #48](https://github.com/qembed/qembed-sql/pull/48), merge commit `dbd949637f4f995a839fb0292feb1b43f0197b23`. The duplicate source definition was removed; the single trigger remains bound to the authoritative function. PostgreSQL 19 / pgvector 0.8.7 smoke passed 427/427 on the PR head and post-merge. Regression tests cover pointerless supersede rejection and successful atomic re-publication.
+- [x] **QSA-015 — Empty-string receipt policy context** — `NOT_REPRODUCED` under current grants; [PR #46](https://github.com/qembed/qembed-sql/pull/46), merge commit `c67f40cc4b2d49be9ad04f9f18a65b32461f3654`, adds catalog regression assertions. PostgreSQL 19 / pgvector 0.8.7 smoke passed 424/424 on the PR head and post-merge. Unset context filters rows; empty/malformed UUID context raises an error rather than exposing rows. `qembed_runtime` has no privileges on the receipt table; dispatcher is INSERT-only.
 - [ ] **QSA-016 — Hash/token length constraints** — `SOURCE_CONFIRMED` in DDL: `invocation_idempotency.payload_hash`, future-model `callers.token_hash`, and `principals.key_hash` lack explicit byte-length checks. `owner_credentials.token_hash` and several decision hashes already enforce 32 bytes. Before adding constraints, confirm the canonical algorithms/lengths for each field with the owning Rust/future-feature contract; do not assume all bytea values are SHA-256.
-- [ ] **QSA-017 — Cross-tenant uniqueness side channels** — `SOURCE_CONFIRMED` in DDL. Global UNIQUE constraints exist for `objects.object_id`, `object_versions.object_version_id`, `snapshots.snapshot_id`, and `events.event_id` in addition to tenant-scoped keys. A colliding UUID can therefore be rejected by a global unique index even when the foreign tenant row is hidden by RLS. Map every FK and Rust identifier contract before changing constraints; add runtime-role cross-tenant collision tests and decide whether UUID existence leakage is an accepted trade-off.
-- [x] **QSA-018 — TRUNCATE defense** — `NOT_REPRODUCED` under current grants. `qembed_runtime` receives SELECT/INSERT on `events`, no UPDATE/DELETE/TRUNCATE; it has no privileges on `outbox_publication_receipts`. The dispatcher receives INSERT only. Neither role owns these tables or is granted TRUNCATE. Row triggers do not fire for TRUNCATE, so add catalog assertions that these least-privilege grants remain in force; explicit statement triggers are unnecessary unless a future role receives TRUNCATE.
+- [ ] **QSA-017 — Cross-tenant uniqueness side channels** — `CONFIRMED` in [PR #49](https://github.com/qembed/qembed-sql/pull/49), merge commit `407fd2090b63c7492ccebd4cba9e989df166abd3`. Runtime-role collision probes show RLS hides Tenant B rows, but global UNIQUE constraints reject Tenant A writes colliding with Tenant B's object, ObjectVersion, Snapshot or Event UUID. PostgreSQL 19 / pgvector 0.8.7 smoke passed 428/428 on the PR head and post-merge. Map identifier resolution and FK contracts before changing uniqueness; the object resolver may rely on global object identity. An explicit owner decision is required on the privacy/identity trade-off.
+- [x] **QSA-018 — TRUNCATE defense** — `NOT_REPRODUCED` under current grants; [PR #46](https://github.com/qembed/qembed-sql/pull/46), merge commit `c67f40cc4b2d49be9ad04f9f18a65b32461f3654`, adds catalog regression assertions. PostgreSQL 19 / pgvector 0.8.7 smoke passed 424/424 on the PR head and post-merge. Runtime, dispatcher, admin, retention, worker and definer roles have no TRUNCATE privilege on `events` or publication receipts. Row triggers do not fire for TRUNCATE, so keep the catalog assertion as a guard against future grants.
 
 ---
 
 ## 4. P2 — performance follow-up (measure before optimizing)
 
-Source revalidation against `719e73d` confirms the candidate index gaps/duplication below. These are not yet demonstrated performance regressions: capture representative row counts, `EXPLAIN (ANALYZE, BUFFERS)` plans and workload evidence before changing indexes.
+Source revalidation against `407fd209` confirms the candidate index gaps/duplication below. These are not yet demonstrated performance regressions: capture representative row counts, `EXPLAIN (ANALYZE, BUFFERS)` plans and workload evidence before changing indexes.
 
 - [ ] **QSA-019 — Knowledge document synchronization index** — `SOURCE_CONFIRMED`: no index begins with `(tenant_id, object_id, document_id)`; current `idx_chunks_visible` does not cover `document_id`. Candidate index supports the sync trigger and FK cascade. Measure update/delete plans and representative document chunk counts.
 - [ ] **QSA-020 — Memory child FK indexes** — `SOURCE_CONFIRMED`: `memory_embeddings` and both `memory_conflicts` memory-reference FKs have no child-side indexes matching `(tenant_id, object_id, memory_id)`. Measure memory deletion/retention cascades and lookup workload before adding indexes.
@@ -292,7 +292,7 @@ Source revalidation against `719e73d` confirms the candidate index gaps/duplicat
 
 ## 5. Execution order
 
-1. [x] **Wave A — Source revalidation:** inspected schema, role grants, RLS policies, SECURITY DEFINER functions, and tests at `719e73d490e5d2998ade8f5fc8a93f220390a0ef`; QSA-013–023 are classified below. Live reproduction remains pending for source-confirmed items; performance items require measured plans.
+1. [x] **Wave A — Source revalidation:** inspected schema, role grants, RLS policies, SECURITY DEFINER functions, and tests at `407fd2090b63c7492ccebd4cba9e989df166abd3`; QSA-013–023 are classified below. QSA-014 and QSA-017 have live PostgreSQL regression evidence; QSA-015 and QSA-018 have catalog regression evidence. Remaining source-confirmed items require contract decisions or measured plans.
 2. [ ] **Wave B — P0 security:** QSA-001 through QSA-006. Prioritize role separation and SECURITY DEFINER hardening; resolve the GUC threat-model decision before claiming tenant isolation against arbitrary SQL.
 3. [ ] **Wave C — P0 data integrity:** QSA-007.
 4. [ ] **Wave D — P1 invariants:** QSA-008 through QSA-012.
@@ -340,11 +340,11 @@ Every remediation PR must include:
 | QSA-011 | PR #36; 418/418 PR-head and post-merge | [PR #36](https://github.com/qembed/qembed-sql/pull/36) | 418/418 | VERIFIED |
 | QSA-012 | ADR RUST-044 assigns exact-byte dedup check to Rust; read-time corruption test pending | — | Pending | DEFERRED_TO_RUST |
 | QSA-013 | Status values admitted, but no transition enters either waiting state; Rust/domain decision pending | Source: schema `object_invocations` + `invocation_state_guard` | Source review | SOURCE_CONFIRMED |
-| QSA-014 | Duplicate `CREATE OR REPLACE`; one trigger, later body replaces earlier definition | Source: schema lines ~223, ~1961 | Source review | SOURCE_CONFIRMED |
-| QSA-015 | Empty/malformed GUC errors or filters rows; runtime has no table privileges, dispatcher INSERT-only | Source: policy and grants | Source review | NOT_REPRODUCED |
+| QSA-014 | PR #48; one authoritative guard + atomic republish regression; 427/427 PR-head and post-merge | [PR #48](https://github.com/qembed/qembed-sql/pull/48) | 427/427 | VERIFIED |
+| QSA-015 | PR #46 catalog regression; runtime no access, dispatcher INSERT-only; 424/424 PR-head and post-merge | [PR #46](https://github.com/qembed/qembed-sql/pull/46) | 424/424 | NOT_REPRODUCED |
 | QSA-016 | Three bytea fields lack explicit length checks; expected encodings need Rust contract confirmation | Source: schema fields | Source review | SOURCE_CONFIRMED |
-| QSA-017 | Global unique IDs include object, object-version, snapshot and event IDs | Source: schema unique constraints | Source review | SOURCE_CONFIRMED |
-| QSA-018 | No runtime/dispatcher TRUNCATE privilege under current grants | Source: grants section | Source review | NOT_REPRODUCED |
+| QSA-017 | PR #49 runtime collision probes; RLS-hidden foreign UUIDs rejected globally; 428/428 PR-head and post-merge | [PR #49](https://github.com/qembed/qembed-sql/pull/49) | 428/428 | CONFIRMED |
+| QSA-018 | PR #46 catalog regression; application/worker roles lack TRUNCATE; 424/424 PR-head and post-merge | [PR #46](https://github.com/qembed/qembed-sql/pull/46) | 424/424 | NOT_REPRODUCED |
 | QSA-019 | Missing candidate knowledge-chunk document index | Source: schema indexes | Catalog review; plans pending | SOURCE_CONFIRMED |
 | QSA-020 | Missing child FK indexes for memory embeddings/conflicts | Source: schema indexes | Catalog review; plans pending | SOURCE_CONFIRMED |
 | QSA-021 | Missing child FK index for knowledge chunk embeddings | Source: schema indexes | Catalog review; plans pending | SOURCE_CONFIRMED |
@@ -362,6 +362,6 @@ The initial findings were supplied from an adversarial audit of commit `164da3c`
 - QSA-013 through QSA-018 were reported as minor observations.
 - QSA-019 through QSA-023 were catalog-based performance observations, not measured.
 
-The current source-revalidation baseline is `719e73d490e5d2998ade8f5fc8a93f220390a0ef` (master, 2026-11-21); its PostgreSQL 19 / pgvector 0.8.7 smoke workflow completed successfully (421/421). This clean-install smoke result is not an independent adversarial retest and does not close source-confirmed items. QSA-013–023 have now been reclassified against current source: QSA-015 and QSA-018 are not exploitable under current grants; QSA-014 is duplicate source text rather than two active triggers; QSA-013 and QSA-016–017 remain contract/security questions; QSA-019–023 remain catalog candidates pending measured plans. The supplied audit remains evidence and a prioritized test plan, not a substitute for live reproduction or independent adversarial testing.
+The current source-revalidation baseline is `407fd2090b63c7492ccebd4cba9e989df166abd3` (master, 2026-11-21); its PostgreSQL 19 / pgvector 0.8.7 smoke workflow completed successfully (428/428). This clean-install smoke result is not an independent adversarial retest and does not close source-confirmed items. QSA-013–023 have now been reclassified against current source: QSA-014 is fixed; QSA-015 and QSA-018 are not exploitable under current grants and have privilege regression assertions; QSA-017 is reproduced and awaits an identifier-privacy decision; QSA-013 and QSA-016 remain domain/encoding contract questions; QSA-019–023 remain catalog candidates pending measured plans. The supplied audit remains evidence and a prioritized test plan, not a substitute for live reproduction or independent adversarial testing.
 
 This roadmap records the remediation program; it does not itself certify the schema as secure or production-ready.
