@@ -1,10 +1,10 @@
 # QEmbed-SQL Security & Integrity Remediation Roadmap
 
 **Priority:** P0 — BLOCKER  
-**Status:** Active; audit findings require revalidation against current `master`  
+**Status:** Active; source-level revalidation recorded against current `master` `719e73d490e5d2998ade8f5fc8a93f220390a0ef`; live reproduction and measured performance work remain explicitly tracked  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
-**Roadmap branch base:** `495602a20a0bfb25873da856e2537c1a35da0d40`  
+**Current revalidation baseline:** `719e73d490e5d2998ade8f5fc8a93f220390a0ef`  
 **Validation target:** PostgreSQL 19 + pgvector 0.8.7  
 **Rule:** No finding is closed by documentation, code inspection alone, or a green legacy smoke suite. Closure requires a regression test that fails before the fix and passes after it, plus recorded validation evidence.
 
@@ -15,7 +15,7 @@
 This roadmap supersedes the ordinary SQL feature backlog while any P0 item is open.
 
 1. **P0 freeze:** do not start unrelated SQL features until all P0 items below are closed or explicitly accepted through a documented threat-model decision by the project owner.
-2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current remediation base is `04d86be8a771c6e24f05379ac415216ac6467916`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
+2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current revalidation base is `719e73d490e5d2998ade8f5fc8a93f220390a0ef`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
 3. **One security boundary per PR:** prefer small, independently reviewable PRs. Do not combine unrelated role, RLS, trigger, retention, or dependency changes.
 4. **Negative tests are mandatory:** tests must prove that the forbidden operation fails or reveals no data, not merely that the intended operation succeeds.
 5. **Test with the real application role:** tests run as superuser or schema owner do not prove runtime-role isolation. Include role switching and realistic grants.
@@ -102,7 +102,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `DOCUMENTED_RISK` / architecture decision required — [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) now explicitly states that `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session-settable and can be forged by arbitrary SQL under `qembed_runtime`. This documents the boundary; it does not mitigate it.
+**Current status:** `DOCUMENTED_RISK` — [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) explicitly states that the identity GUCs are session-settable and forgeable by arbitrary SQL under `qembed_runtime`. The project owner selected a signed transaction-context direction; a parked, unmerged design plan is recorded on branch [`architecture/rt-050-signed-transaction-context`](https://github.com/qembed/qembed-sql/tree/architecture/rt-050-signed-transaction-context) in `ADR_RT-050_Cryptographically_Verified_Transaction_Context.md`. This is a design decision only: the current GUC trust gap remains open until PostgreSQL 19 verification and the Rust/SQL contract are prototyped, tested and deployed.
 
 **Reported behavior:** `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session settings writable by the runtime role. Under arbitrary SQL execution as `qembed_runtime`, a caller can forge context and bypass the intended delegation boundary, including episodic-memory isolation.
 
@@ -127,11 +127,11 @@ The first two can return identifiers belonging to other tenants. Background-work
 **Reported behavior:** a runtime role with UPDATE on `knowledge_chunks` could set `qembed.interval_sync = 'on'` and modify validity intervals directly, bypassing the intended document-revision synchronization guard.
 
 **Required work**
-- [ ] Trace all reads/writes of `qembed.interval_sync` and identify the intended trusted synchronization path.
-- [ ] Replace caller-controlled authorization-by-GUC with a boundary that an ordinary runtime caller cannot forge, or narrow table/function privileges so the caller cannot perform the guarded update directly.
-- [ ] Preserve the legitimate `knowledge_documents_sync` behavior.
-- [ ] Add a negative test for direct interval mutation after setting the GUC as `qembed_runtime`.
-- [ ] Add a positive test proving the approved document revision path still synchronizes intervals atomically.
+- [x] Trace all reads/writes of `qembed.interval_sync` and identify the intended trusted synchronization path.
+- [x] Replace caller-controlled authorization-by-GUC with a boundary that an ordinary runtime caller cannot forge, or narrow table/function privileges so the caller cannot perform the guarded update directly.
+- [x] Preserve the legitimate `knowledge_documents_sync` behavior.
+- [x] Add a negative test for direct interval mutation after setting the GUC as `qembed_runtime`.
+- [x] Add a positive test proving the approved document revision path still synchronizes intervals atomically.
 
 **Acceptance:** runtime SQL cannot self-authorize interval changes; the approved document update path remains functional.
 
@@ -146,11 +146,11 @@ The first two can return identifiers belonging to other tenants. Background-work
 **Reported behavior:** unlike owner credentials and delegation records, a Caller revocation could be reversed by setting `callers.revoked_at` back to NULL.
 
 **Required work**
-- [ ] Inspect current Caller lifecycle triggers, grants, and all write paths.
-- [ ] Define whether revocation is final. The supplied audit assumes final revocation, consistent with the existing delegation/credential model.
-- [ ] Enforce immutable revocation at the database boundary.
-- [ ] Ensure reactivation, if a product requirement exists, uses a new identity/history record rather than erasing revocation history.
-- [ ] Add negative tests for clearing or rewriting `revoked_at` and positive tests for the approved lifecycle.
+- [x] Inspect current Caller lifecycle triggers, grants, and all write paths.
+- [x] Define whether revocation is final. The supplied audit assumes final revocation, consistent with the existing delegation/credential model.
+- [x] Enforce immutable revocation at the database boundary.
+- [x] Ensure reactivation, if a product requirement exists, uses a new identity/history record rather than erasing revocation history.
+- [x] Add negative tests for clearing or rewriting `revoked_at` and positive tests for the approved lifecycle.
 
 **Acceptance:** a revoked Caller cannot be silently reactivated by the runtime or an ordinary update path.
 
@@ -165,11 +165,11 @@ The first two can return identifiers belonging to other tenants. Background-work
 **Reported behavior:** policy `ks_write` appeared to allow the runtime role to delete a tenant's kill-switch row, while the `T-50` check constrained only the `platform` value.
 
 **Required work**
-- [ ] Re-check current RLS policies, table grants, role attributes, and all kill-switch mutation functions.
-- [ ] Confirm intended ownership: can a tenant disable its own switch, or is the switch controlled exclusively by platform operations?
-- [ ] If platform-owned, restrict insert/update/delete to the platform operations boundary and prevent tenant runtime deletion.
-- [ ] If tenant deletion is intentional, document the precise semantics and prove it cannot disable a platform-enforced global stop.
-- [ ] Add cross-role negative tests for tenant attempts to delete or weaken platform kill-switch state.
+- [x] Re-check current RLS policies, table grants, role attributes, and all kill-switch mutation functions.
+- [x] Confirm intended ownership: can a tenant disable its own switch, or is the switch controlled exclusively by platform operations?
+- [x] If platform-owned, restrict insert/update/delete to the platform operations boundary and prevent tenant runtime deletion.
+- [x] If tenant deletion is intentional, document the precise semantics and prove it cannot disable a platform-enforced global stop.
+- [x] Add cross-role negative tests for tenant attempts to delete or weaken platform kill-switch state.
 
 **Acceptance:** the kill-switch authority is explicit and a tenant cannot remove a control that is intended to be platform-enforced.
 
@@ -240,11 +240,11 @@ These findings were inferred from DDL rather than reproduced in the original aud
 **Reported severity:** Medium (inferred)  
 **Current status:** `VERIFIED` — merged in [PR #36](https://github.com/qembed/qembed-sql/pull/36), commit `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`. PostgreSQL 19 / pgvector 0.8.7 smoke suite passed 418/418 on the PR head and again post-merge.
 
-- [ ] Inspect the actual extension-version gate and CI matrix.
-- [ ] Reject pgvector versions below 0.8.7, including earlier 0.8.x patch releases.
-- [ ] Compare the full semantic version, not only major/minor.
-- [ ] Add tests for 0.8.0, 0.8.6, 0.8.7, and a later compatible release.
-- [ ] Ensure CI provisions the exact target version.
+- [x] Inspect the actual extension-version gate and CI matrix.
+- [x] Reject pgvector versions below 0.8.7, including earlier 0.8.x patch releases.
+- [x] Compare the full semantic version, not only major/minor.
+- [x] Add tests for 0.8.0, 0.8.6, 0.8.7, and a later compatible release.
+- [x] Ensure CI provisions the exact target version.
 
 **Acceptance:** clean install refuses unsupported pgvector versions and accepts 0.8.7 or later according to the documented compatibility policy.
 
@@ -267,24 +267,24 @@ These findings were inferred from DDL rather than reproduced in the original aud
 
 Revalidate all items against current schema before changing code.
 
-- [ ] **QSA-013 — Unreachable Invocation states:** determine whether `WaitingForInput` and `WaitingForApproval` are intentionally reserved or unreachable dead vocabulary; align constraints/domain docs.
-- [ ] **QSA-014 — Duplicate trigger/function definition:** inspect duplicate `object_versions_guard` definitions; remove dead/ambiguous definition if confirmed and test the effective trigger binding.
-- [ ] **QSA-015 — Fail-closed receipt policy:** check `outbox_publication_receipts` policy handling of empty-string GUCs; use explicit fail-closed parsing where required and add tests for unset, empty, malformed, and valid context.
-- [ ] **QSA-016 — Hash/token length constraints:** assess and add appropriate length CHECKs for `payload_hash`, `callers.token_hash`, and `principals.key_hash`, without changing valid Rust encodings.
-- [ ] **QSA-017 — Cross-tenant uniqueness side channels:** assess global UNIQUE constraints on `object_id`, `snapshot_id`, and `event_id`; prefer tenant-scoped uniqueness where compatible with all FKs and contracts. Test that foreign-tenant UUID collisions do not expose unintended existence information.
-- [ ] **QSA-018 — TRUNCATE defense:** verify privileges and add explicit TRUNCATE protections for append-only `events` and `outbox_publication_receipts` if a role can otherwise truncate them.
+- [ ] **QSA-013 — Invocation waiting states** — `SOURCE_CONFIRMED` at schema level. The status CHECK admits `WaitingForInput` and `WaitingForApproval`, but the current `invocation_state_guard` transition matrix has no transition into either state; new rows must start `Received`. Decide whether these are reserved future states or dead vocabulary by comparing the Rust domain state machine and product contract. Do not remove them until that cross-repo contract check is complete.
+- [ ] **QSA-014 — Duplicate `object_versions_guard` definition** — `SOURCE_CONFIRMED` in source. The schema defines/replaces the same function twice (initial definition near line 223, final replacement near line 1961); the trigger is created once and the later `CREATE OR REPLACE` replaces the body for the same function object. This is source duplication, not two active triggers. Remove the obsolete earlier definition in a focused cleanup PR and assert the trigger points to the final function; no current double-trigger behavior was found.
+- [x] **QSA-015 — Empty-string receipt policy context** — `NOT_REPRODUCED` as an access-control bypass on current `master`. The policy casts the tenant GUC to UUID: unset context yields NULL and filters rows; an empty/malformed value raises a cast error, not an authorization bypass. More importantly, `qembed_runtime` has no privileges on `outbox_publication_receipts`; the dispatcher has INSERT only. Optional `NULLIF` normalization and catalog regression assertions may improve predictable error behavior, but this is not a current tenant-data exposure.
+- [ ] **QSA-016 — Hash/token length constraints** — `SOURCE_CONFIRMED` in DDL: `invocation_idempotency.payload_hash`, future-model `callers.token_hash`, and `principals.key_hash` lack explicit byte-length checks. `owner_credentials.token_hash` and several decision hashes already enforce 32 bytes. Before adding constraints, confirm the canonical algorithms/lengths for each field with the owning Rust/future-feature contract; do not assume all bytea values are SHA-256.
+- [ ] **QSA-017 — Cross-tenant uniqueness side channels** — `SOURCE_CONFIRMED` in DDL. Global UNIQUE constraints exist for `objects.object_id`, `object_versions.object_version_id`, `snapshots.snapshot_id`, and `events.event_id` in addition to tenant-scoped keys. A colliding UUID can therefore be rejected by a global unique index even when the foreign tenant row is hidden by RLS. Map every FK and Rust identifier contract before changing constraints; add runtime-role cross-tenant collision tests and decide whether UUID existence leakage is an accepted trade-off.
+- [x] **QSA-018 — TRUNCATE defense** — `NOT_REPRODUCED` under current grants. `qembed_runtime` receives SELECT/INSERT on `events`, no UPDATE/DELETE/TRUNCATE; it has no privileges on `outbox_publication_receipts`. The dispatcher receives INSERT only. Neither role owns these tables or is granted TRUNCATE. Row triggers do not fire for TRUNCATE, so add catalog assertions that these least-privilege grants remain in force; explicit statement triggers are unnecessary unless a future role receives TRUNCATE.
 
 ---
 
 ## 4. P2 — performance follow-up (measure before optimizing)
 
-These were catalog-based observations, not measured regressions. Capture query plans and representative row counts before adding indexes.
+Source revalidation against `719e73d` confirms the candidate index gaps/duplication below. These are not yet demonstrated performance regressions: capture representative row counts, `EXPLAIN (ANALYZE, BUFFERS)` plans and workload evidence before changing indexes.
 
-- [ ] **QSA-019 — Knowledge document synchronization index:** evaluate `knowledge_chunks (tenant_id, object_id, document_id)` for `knowledge_documents_sync` and cascading deletes.
-- [ ] **QSA-020 — Memory child FK indexes:** evaluate indexes supporting FKs/cascades for `memory_embeddings` and `memory_conflicts`.
-- [ ] **QSA-021 — Knowledge embedding FK index:** evaluate FK-supporting indexes for `knowledge_chunk_embeddings`.
-- [ ] **QSA-022 — Invocation delivery sweep expression index:** measure `payload->>'invocation_id'` lookup in `sweep_stale_invocation_deliveries`; add an expression index only if the plan and workload justify it.
-- [ ] **QSA-023 — Duplicate event ordering index:** verify whether `events_aggregate_order_idx` duplicates `events_stream_version_unique`; remove redundancy only after checking uniqueness and query-plan requirements.
+- [ ] **QSA-019 — Knowledge document synchronization index** — `SOURCE_CONFIRMED`: no index begins with `(tenant_id, object_id, document_id)`; current `idx_chunks_visible` does not cover `document_id`. Candidate index supports the sync trigger and FK cascade. Measure update/delete plans and representative document chunk counts.
+- [ ] **QSA-020 — Memory child FK indexes** — `SOURCE_CONFIRMED`: `memory_embeddings` and both `memory_conflicts` memory-reference FKs have no child-side indexes matching `(tenant_id, object_id, memory_id)`. Measure memory deletion/retention cascades and lookup workload before adding indexes.
+- [ ] **QSA-021 — Knowledge embedding FK index** — `SOURCE_CONFIRMED`: the PK `(tenant_id, chunk_id, model_id)` does not cover the FK key `(tenant_id, object_id, chunk_id)` because `object_id` interrupts the leading-key match. Measure chunk deletion and FK checks before adding a supporting index.
+- [ ] **QSA-022 — Invocation delivery sweep expression index** — `SOURCE_CONFIRMED`: `sweep_stale_invocation_deliveries` joins on `outbox_messages.payload->>'invocation_id'` and no matching expression index is defined in the clean schema. Measure tenant outbox scans and consider a partial expression index aligned with `topic='invocation.received'` and replay/delivery predicates.
+- [ ] **QSA-023 — Duplicate event ordering index** — `SOURCE_CONFIRMED`: `events_aggregate_order_idx` duplicates the exact key order of the unique index created by `events_stream_version_unique` (tenant, aggregate type, aggregate ID, stream version). The unique index can satisfy the same ordering/lookups; verify catalog definitions and usage statistics, then remove the redundant non-unique index in a focused change.
 
 **Acceptance for performance items:** before/after plans and representative measurements are attached to the PR. No index is added or removed solely from catalog speculation.
 
@@ -292,7 +292,7 @@ These were catalog-based observations, not measured regressions. Capture query p
 
 ## 5. Execution order
 
-1. [ ] **Wave A — Revalidation baseline:** inspect current `04d86be8a771c6e24f05379ac415216ac6467916` schema, role grants, RLS policies, SECURITY DEFINER functions, and tests; mark each finding `CONFIRMED`, `NOT_REPRODUCED`, or `BLOCKED` with evidence.
+1. [x] **Wave A — Source revalidation:** inspected schema, role grants, RLS policies, SECURITY DEFINER functions, and tests at `719e73d490e5d2998ade8f5fc8a93f220390a0ef`; QSA-013–023 are classified below. Live reproduction remains pending for source-confirmed items; performance items require measured plans.
 2. [ ] **Wave B — P0 security:** QSA-001 through QSA-006. Prioritize role separation and SECURITY DEFINER hardening; resolve the GUC threat-model decision before claiming tenant isolation against arbitrary SQL.
 3. [ ] **Wave C — P0 data integrity:** QSA-007.
 4. [ ] **Wave D — P1 invariants:** QSA-008 through QSA-012.
@@ -329,7 +329,7 @@ Every remediation PR must include:
 |---|---|---|---|---|
 | QSA-001 | PR #29; 396/396 PR-head and post-merge | [PR #29](https://github.com/qembed/qembed-sql/pull/29) | 396/396 | VERIFIED |
 | QSA-002 | PR #28; 388/388 PR-head and post-merge | [PR #28](https://github.com/qembed/qembed-sql/pull/28) | 388/388 | VERIFIED |
-| QSA-003 | Explicit GUC spoofing threat model in ADR RT-049; owner decision pending | [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) | Pending | DOCUMENTED_RISK |
+| QSA-003 | RT-049 documents forgeable GUCs; RT-050 design parked on branch, implementation/prototype pending | [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) / [RT-050 branch](https://github.com/qembed/qembed-sql/tree/architecture/rt-050-signed-transaction-context) | Pending | DOCUMENTED_RISK |
 | QSA-004 | PR #34; 409/409 PR-head and post-merge | [PR #34](https://github.com/qembed/qembed-sql/pull/34) | 409/409 | VERIFIED |
 | QSA-005 | PR #31; 404/404 PR-head and post-merge | [PR #31](https://github.com/qembed/qembed-sql/pull/31) | 404/404 | VERIFIED |
 | QSA-006 | PR #35; 416/416 PR-head and post-merge | [PR #35](https://github.com/qembed/qembed-sql/pull/35) | 416/416 | VERIFIED |
@@ -339,8 +339,17 @@ Every remediation PR must include:
 | QSA-010 | PR #42; 421/421 PR-head and post-merge | [PR #42](https://github.com/qembed/qembed-sql/pull/42) | 421/421 | VERIFIED |
 | QSA-011 | PR #36; 418/418 PR-head and post-merge | [PR #36](https://github.com/qembed/qembed-sql/pull/36) | 418/418 | VERIFIED |
 | QSA-012 | ADR RUST-044 assigns exact-byte dedup check to Rust; read-time corruption test pending | — | Pending | DEFERRED_TO_RUST |
-| QSA-013–018 | Pending | — | Pending | REVALIDATE |
-| QSA-019–023 | Pending | — | Pending | REVALIDATE |
+| QSA-013 | Status values admitted, but no transition enters either waiting state; Rust/domain decision pending | Source: schema `object_invocations` + `invocation_state_guard` | Source review | SOURCE_CONFIRMED |
+| QSA-014 | Duplicate `CREATE OR REPLACE`; one trigger, later body replaces earlier definition | Source: schema lines ~223, ~1961 | Source review | SOURCE_CONFIRMED |
+| QSA-015 | Empty/malformed GUC errors or filters rows; runtime has no table privileges, dispatcher INSERT-only | Source: policy and grants | Source review | NOT_REPRODUCED |
+| QSA-016 | Three bytea fields lack explicit length checks; expected encodings need Rust contract confirmation | Source: schema fields | Source review | SOURCE_CONFIRMED |
+| QSA-017 | Global unique IDs include object, object-version, snapshot and event IDs | Source: schema unique constraints | Source review | SOURCE_CONFIRMED |
+| QSA-018 | No runtime/dispatcher TRUNCATE privilege under current grants | Source: grants section | Source review | NOT_REPRODUCED |
+| QSA-019 | Missing candidate knowledge-chunk document index | Source: schema indexes | Catalog review; plans pending | SOURCE_CONFIRMED |
+| QSA-020 | Missing child FK indexes for memory embeddings/conflicts | Source: schema indexes | Catalog review; plans pending | SOURCE_CONFIRMED |
+| QSA-021 | Missing child FK index for knowledge chunk embeddings | Source: schema indexes | Catalog review; plans pending | SOURCE_CONFIRMED |
+| QSA-022 | No matching JSON expression index for invocation delivery join | Source: function and indexes | Catalog review; plans pending | SOURCE_CONFIRMED |
+| QSA-023 | Non-unique event ordering index duplicates unique constraint key | Source: schema indexes | Catalog review; usage stats pending | SOURCE_CONFIRMED |
 
 ---
 
@@ -353,6 +362,6 @@ The initial findings were supplied from an adversarial audit of commit `164da3c`
 - QSA-013 through QSA-018 were reported as minor observations.
 - QSA-019 through QSA-023 were catalog-based performance observations, not measured.
 
-The current repository base for this roadmap is `495602a20a0bfb25873da856e2537c1a35da0d40`. QSA-001, QSA-002, and QSA-007 have since been remediated and independently re-run through the PostgreSQL 19 / pgvector 0.8.7 smoke workflow. Remaining findings still require revalidation against this exact base before remediation. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
+The current source-revalidation baseline is `719e73d490e5d2998ade8f5fc8a93f220390a0ef` (master, 2026-11-21); its PostgreSQL 19 / pgvector 0.8.7 smoke workflow completed successfully (421/421). This clean-install smoke result is not an independent adversarial retest and does not close source-confirmed items. QSA-013–023 have now been reclassified against current source: QSA-015 and QSA-018 are not exploitable under current grants; QSA-014 is duplicate source text rather than two active triggers; QSA-013 and QSA-016–017 remain contract/security questions; QSA-019–023 remain catalog candidates pending measured plans. The supplied audit remains evidence and a prioritized test plan, not a substitute for live reproduction or independent adversarial testing.
 
 This roadmap records the remediation program; it does not itself certify the schema as secure or production-ready.
