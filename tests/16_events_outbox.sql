@@ -104,6 +104,16 @@ BEGIN
     SET delivered_at=now(), publication_stream='QEMBED_EVENTS',
         publication_sequence=1, publication_duplicate=false
     WHERE tenant_id=tid AND delivery_id=did;
+  BEGIN
+    UPDATE outbox_messages
+      SET delivered_at=now(), publication_stream='QEMBED_EVENTS',
+          publication_sequence=NULL, publication_duplicate=false
+      WHERE tenant_id=tid AND delivery_id=pending_did;
+    INSERT INTO tt.res VALUES ('RUST-051b partial PubAck receipt rejected','check violation','accepted',false,'partial receipt unexpectedly accepted');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO tt.res VALUES ('RUST-051b partial PubAck receipt rejected','check violation','check violation',true,'');
+  END;
+
   SELECT delivered_at IS NOT NULL INTO ok FROM outbox_messages WHERE tenant_id=tid AND delivery_id=did;
   INSERT INTO tt.res VALUES ('AUDIT-005 delivered_at marks successful delivery','true',ok::text,ok,'');
   INSERT INTO tt.res VALUES ('AUDIT-005 pending delivery remains undelivered','true',
