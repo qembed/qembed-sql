@@ -670,7 +670,7 @@ CREATE TABLE knowledge_chunk_embeddings (
     REFERENCES knowledge_chunks(tenant_id, object_id, id) ON DELETE CASCADE
 );
 
-CREATE FUNCTION check_embedding_dim() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $
+CREATE FUNCTION check_embedding_dim() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $qsa002_embedding_dim$
 DECLARE d INTEGER;
 BEGIN
   SELECT dimension INTO d FROM embedding_models WHERE id = NEW.model_id;
@@ -678,7 +678,7 @@ BEGIN
     RAISE EXCEPTION 'embedding dimension mismatch for model %', NEW.model_id;
   END IF;
   RETURN NEW;
-END $$;
+END $qsa002_embedding_dim$;
 CREATE TRIGGER trg_kce_dim BEFORE INSERT OR UPDATE OF embedding, model_id
   ON knowledge_chunk_embeddings FOR EACH ROW EXECUTE FUNCTION check_embedding_dim();
 -- HNSW partial expression indexes are created per model by migrator,
@@ -2013,7 +2013,7 @@ END $$;
 -- RT-046: object pointer may reference only a published version belonging to
 -- the same tenant/object. DEFERRABLE FK remains for transactional publication.
 CREATE FUNCTION object_published_pointer_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $qsa002_pointer_guard$
 DECLARE st TEXT;
 BEGIN
   IF NEW.published_version_id IS NULL THEN
@@ -2026,7 +2026,7 @@ BEGIN
     RAISE EXCEPTION 'published_version_id must point to a published version';
   END IF;
   RETURN NEW;
-END $$;
+END $qsa002_pointer_guard$;
 CREATE TRIGGER trg_object_published_pointer_guard
   BEFORE INSERT OR UPDATE OF state,published_version_id,tenant_id,object_id ON objects
   FOR EACH ROW EXECUTE FUNCTION object_published_pointer_guard();
