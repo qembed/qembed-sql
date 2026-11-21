@@ -937,6 +937,9 @@ CREATE TABLE outbox_messages (
   payload JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   delivered_at TIMESTAMPTZ,
+  publication_stream TEXT,
+  publication_sequence BIGINT,
+  publication_duplicate BOOLEAN,
   lease_owner TEXT,
   lease_expires_at TIMESTAMPTZ,
   claim_token BIGINT NOT NULL DEFAULT 0 CHECK (claim_token >= 0),
@@ -944,6 +947,11 @@ CREATE TABLE outbox_messages (
   PRIMARY KEY (tenant_id, delivery_id),
   CONSTRAINT outbox_lease_pair CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
   CONSTRAINT outbox_delivered_unleased CHECK (delivered_at IS NULL OR lease_owner IS NULL),
+  CONSTRAINT outbox_publication_receipt_consistent CHECK (
+    (delivered_at IS NULL AND publication_stream IS NULL AND publication_sequence IS NULL AND publication_duplicate IS NULL)
+    OR
+    (delivered_at IS NOT NULL AND publication_stream IS NOT NULL AND publication_sequence > 0 AND publication_duplicate IS NOT NULL)
+  ),
   UNIQUE (tenant_id, event_id),
   FOREIGN KEY (tenant_id, event_id)
     REFERENCES events (tenant_id, event_id)
@@ -1650,10 +1658,12 @@ REVOKE SELECT ON events FROM qembed_dispatcher;
 REVOKE SELECT ON outbox_messages FROM qembed_dispatcher;
 GRANT SELECT (
   tenant_id, delivery_id, topic, payload, created_at, delivered_at,
+  publication_stream, publication_sequence, publication_duplicate,
   lease_owner, lease_expires_at, claim_token, attempts
 ) ON outbox_messages TO qembed_dispatcher;
 GRANT UPDATE (
-  delivered_at, lease_owner, lease_expires_at, claim_token, attempts
+  delivered_at, publication_stream, publication_sequence, publication_duplicate,
+  lease_owner, lease_expires_at, claim_token, attempts
 ) ON outbox_messages TO qembed_dispatcher;
 
 -- admin
