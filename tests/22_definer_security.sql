@@ -116,6 +116,9 @@ SELECT tt.chk('QSA-001 worker role is isolated and has only worker entry points'
        AND has_function_privilege('qembed_worker','public.list_pending_reconciliations(integer)','EXECUTE')
        AND has_function_privilege('qembed_worker','public.sweep_expired_reservations(integer)','EXECUTE')
        AND NOT has_function_privilege('qembed_worker','public.retention_purge(text,timestamptz,text)','EXECUTE')
+       AND NOT has_function_privilege('qembed_worker','public.authenticate_principal(bytea)','EXECUTE')
+       AND NOT has_function_privilege('qembed_worker','public.grant_caller_delegation(uuid)','EXECUTE')
+       AND NOT has_function_privilege('qembed_worker','public.resolve_delegated_caller(uuid)','EXECUTE')
        FROM pg_roles WHERE rolname='qembed_worker'$q$);
 SELECT tt.chk('QSA-001 worker has no direct tenant data table access',
   $q$SELECT NOT has_table_privilege('qembed_worker','public.object_invocations','SELECT')
