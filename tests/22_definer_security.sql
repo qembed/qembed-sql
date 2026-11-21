@@ -179,7 +179,7 @@ SELECT tt.chk('AUDIT-010 only isolated allocator can mutate stream counters',
        AND NOT pg_has_role('qembed_dispatcher','qembed_event_allocator','MEMBER')$q$);
 
 SELECT tt.chk('QSA-002 every SECURITY DEFINER function pins pg_temp last',
-  $q$SELECT count(*)=11 AND bool_and(
+  $q$SELECT count(*)=12 AND bool_and(
        proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp'])
        FROM pg_proc p
        WHERE pronamespace='public'::regnamespace AND prosecdef$q$);
