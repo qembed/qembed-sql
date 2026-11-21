@@ -183,3 +183,21 @@ SELECT tt.chk('QSA-020 memory_conflicts has valid indexes for both memory refere
        AND idx.relname='idx_memory_conflicts_conflicting_memory'
        AND i.indisvalid AND i.indisready AND i.indpred IS NULL
        AND pg_get_indexdef(i.indexrelid) LIKE '%(tenant_id, object_id, conflicting_memory_id)%')$q$);
+
+
+-- QSA-022: partial expression index matches the stale invocation recovery join.
+SELECT tt.chk('QSA-022 outbox invocation recovery index has the expected expression and predicate',
+ $q$SELECT EXISTS (
+    SELECT 1
+      FROM pg_index i
+      JOIN pg_class idx ON idx.oid=i.indexrelid
+      JOIN pg_class tbl ON tbl.oid=i.indrelid
+     WHERE tbl.oid='public.outbox_messages'::regclass
+       AND idx.relname='idx_outbox_invocation_recovery'
+       AND i.indisvalid AND i.indisready
+       AND pg_get_indexdef(i.indexrelid, 1, true)='tenant_id'
+       AND position('invocation_id' in pg_get_indexdef(i.indexrelid)) > 0
+       AND position('invocation.received' in pg_get_expr(i.indpred,i.indrelid)) > 0
+       AND position('delivered_at IS NOT NULL' in pg_get_expr(i.indpred,i.indrelid)) > 0
+       AND position('replay_requested_at IS NULL' in pg_get_expr(i.indpred,i.indrelid)) > 0
+ )$q$);
