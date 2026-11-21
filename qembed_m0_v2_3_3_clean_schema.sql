@@ -965,8 +965,7 @@ REVOKE CREATE ON SCHEMA public FROM qembed_event_allocator;
 REVOKE qembed_event_allocator FROM CURRENT_USER;
 REVOKE ALL ON FUNCTION assign_event_stream_version() FROM PUBLIC;
 
-CREATE INDEX events_aggregate_order_idx
-  ON events (tenant_id, aggregate_type, aggregate_id, stream_version);
+-- events_stream_version_unique already supplies aggregate ordering and uniqueness.
 
 CREATE FUNCTION reject_event_mutation() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $event_append_only$
