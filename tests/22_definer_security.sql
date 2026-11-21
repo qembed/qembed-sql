@@ -83,7 +83,7 @@ SELECT tt.chk('AUDIT-010 authenticate_principal ignores temporary shadow table',
   $q$SELECT EXISTS (SELECT 1 FROM authenticate_principal('\x01')
        WHERE principal_id='22222222-0000-0000-0000-00000000000a')$q$);
 SELECT tt.chk('AUDIT-010 resolve_object_tenant ignores temporary shadow table',
-  $q$SELECT resolve_object_tenant('0b000000-0000-0000-0000-000000000001')
+  $q$SELECT resolve_object_tenant('aaaaaaaa-0000-0000-0000-000000000001','0b000000-0000-0000-0000-000000000001')
        = 'aaaaaaaa-0000-0000-0000-000000000001'::uuid$q$);
 SELECT tt.try('AUDIT-010 runtime cannot create objects in SECURITY DEFINER search_path', 'err',
   $q$CREATE FUNCTION public.audit010_shadow() RETURNS integer LANGUAGE sql AS 'SELECT 1'$q$);
