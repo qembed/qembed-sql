@@ -1,6 +1,22 @@
 -- AUDIT-010: SECURITY DEFINER ownership, search_path, grants and injection boundaries.
 SET client_min_messages=warning;
 
+-- QSA-002 adversarial fixtures. Created as the test owner before switching to runtime.
+INSERT INTO embedding_models(id,provider,model_name,dimension,distance_metric)
+VALUES ('qsa002-shadow-test','test','qsa002-shadow-test',3,'cosine')
+ON CONFLICT (id) DO UPDATE SET dimension=3;
+INSERT INTO objects(tenant_id,object_id,state)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000001','draft');
+INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number,status)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000002',1,'draft');
+INSERT INTO knowledge_documents(id,tenant_id,object_id,doc_key,title,status)
+VALUES ('22000000-0000-0000-0000-000000000004','aaaaaaaa-0000-0000-0000-000000000001',
+        '0b000000-0000-0000-0000-000000000001','qsa002-shadow','QSA-002 shadow fixture','staged');
+INSERT INTO knowledge_chunks(id,tenant_id,object_id,document_id,content,position)
+VALUES ('22000000-0000-0000-0000-000000000005','aaaaaaaa-0000-0000-0000-000000000001',
+        '0b000000-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000004',
+        'QSA-002 embedding dimension shadow fixture',1);
+
 SELECT tt.chk('AUDIT-010 public schema is not writable by PUBLIC',
   $q$SELECT NOT has_schema_privilege('public','public','CREATE')$q$);
 SELECT tt.chk('AUDIT-010 application roles cannot create in public',
@@ -8,6 +24,52 @@ SELECT tt.chk('AUDIT-010 application roles cannot create in public',
        FROM unnest(ARRAY['qembed_runtime','qembed_dispatcher','qembed_admin','qembed_retention','qembed_definer','qembed_event_allocator']) AS r$q$);
 
 SET ROLE qembed_runtime;
+SELECT set_config('app.tenant_id','aaaaaaaa-0000-0000-0000-000000000001',false);
+
+-- QSA-002: temporary embedding_models must not override the trusted model dimension.
+CREATE TEMP TABLE embedding_models(id text PRIMARY KEY, dimension integer);
+INSERT INTO embedding_models VALUES ('qsa002-shadow-test',5);
+SELECT tt.try('QSA-002 temporary model shadow cannot bypass embedding dimension guard','err',
+  $q$INSERT INTO knowledge_chunk_embeddings(tenant_id,object_id,chunk_id,model_id,embedding)
+     VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+             '0b000000-0000-0000-0000-000000000001',
+             '22000000-0000-0000-0000-000000000005',
+             'qsa002-shadow-test','[1,2,3,4,5]'::vector)$q$);
+
+-- QSA-002: temporary object_versions must not make a Draft version look Published.
+UPDATE objects SET state='validating'
+ WHERE tenant_id='aaaaaaaa-0000-0000-0000-000000000001'
+   AND object_id='22000000-0000-0000-0000-000000000001';
+CREATE TEMP TABLE object_versions(
+  tenant_id uuid, object_id uuid, object_version_id uuid, status text
+);
+INSERT INTO object_versions VALUES
+ ('aaaaaaaa-0000-0000-0000-000000000001',
+  '22000000-0000-0000-0000-000000000001',
+  '22000000-0000-0000-0000-000000000002','published');
+SELECT tt.try('QSA-002 temporary version shadow cannot publish a Draft version','err',
+  $q$UPDATE objects SET state='active', published_version_id='22000000-0000-0000-0000-000000000002'
+     WHERE tenant_id='aaaaaaaa-0000-0000-0000-000000000001'
+       AND object_id='22000000-0000-0000-0000-000000000001'$q$);
+
+-- QSA-002: temporary event_stream_counters must not choose the assigned stream version.
+CREATE TEMP TABLE event_stream_counters(
+  tenant_id uuid NOT NULL, aggregate_type text NOT NULL, aggregate_id uuid NOT NULL,
+  last_stream_version bigint NOT NULL,
+  PRIMARY KEY(tenant_id,aggregate_type,aggregate_id)
+);
+INSERT INTO event_stream_counters VALUES
+ ('aaaaaaaa-0000-0000-0000-000000000001','object',
+  '22000000-0000-0000-0000-000000000001',4999);
+GRANT ALL ON TABLE event_stream_counters TO qembed_event_allocator;
+INSERT INTO events(tenant_id,event_id,aggregate_type,aggregate_id,event_type,payload)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000003',
+        'object','22000000-0000-0000-0000-000000000001','qsa002.shadow.test','{}');
+SELECT tt.chk('QSA-002 stream version came from trusted counter, not pg_temp',
+  $q$SELECT e.stream_version=1
+       AND (SELECT last_stream_version=4999 FROM pg_temp.event_stream_counters)
+       FROM events e WHERE e.event_id='22000000-0000-0000-0000-000000000003'$q$);
+
 -- A caller may create temporary objects, but they must not shadow relations used
 -- by SECURITY DEFINER functions: pg_temp is explicitly last in their search_path.
 CREATE TEMP TABLE principals (
@@ -71,7 +133,7 @@ SELECT tt.chk('AUDIT-010 no application role is a member of definer',
 SELECT tt.chk('AUDIT-010 event stream allocator is an isolated definer trigger',
   $q$SELECT pg_get_userbyid(proowner)='qembed_event_allocator'
        AND prosecdef
-       AND proconfig @> ARRAY['search_path=pg_catalog, public']
+       AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
        AND NOT has_function_privilege('public',p.oid,'EXECUTE')
        FROM pg_proc p WHERE proname='assign_event_stream_version'
          AND pronamespace='public'::regnamespace$q$);
@@ -83,6 +145,19 @@ SELECT tt.chk('AUDIT-010 only isolated allocator can mutate stream counters',
        AND NOT has_table_privilege('qembed_event_allocator','public.events','INSERT')
        AND NOT pg_has_role('qembed_runtime','qembed_event_allocator','MEMBER')
        AND NOT pg_has_role('qembed_dispatcher','qembed_event_allocator','MEMBER')$q$);
+
+SELECT tt.chk('QSA-002 every SECURITY DEFINER function pins pg_temp last',
+  $q$SELECT count(*)=11 AND bool_and(
+       proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp'])
+       FROM pg_proc p
+       WHERE pronamespace='public'::regnamespace AND prosecdef$q$);
+SELECT tt.chk('QSA-002 embedding and published-pointer trigger guards pin pg_temp last',
+  $q$SELECT
+       (SELECT proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
+          FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='check_embedding_dim')
+       AND
+       (SELECT proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
+          FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='object_published_pointer_guard')$q$);
 
 SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PUBLIC-executable',
   $q$SELECT count(*)=9 AND bool_and(

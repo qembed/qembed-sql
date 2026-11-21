@@ -97,7 +97,7 @@ SELECT tt.chk('T-57 definer fns have isolated owners, pinned search_path and no 
       AND prosecdef AND proconfig IS NOT NULL
       AND CASE WHEN proname='assign_event_stream_version'
           THEN pg_get_userbyid(proowner)='qembed_event_allocator'
-               AND proconfig @> ARRAY['search_path=pg_catalog, public']
+               AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
           ELSE pg_get_userbyid(proowner)='qembed_definer'
                AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
       END)
