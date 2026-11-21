@@ -53,11 +53,25 @@ RESET ROLE;
 SELECT tt.chk('R3-03 output NULL, row still Succeeded', $q$SELECT output IS NULL AND status='Succeeded' FROM tool_executions WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
 -- dispatcher
 SET ROLE qembed_dispatcher;
-SELECT tt.chk('T-51 dispatcher reads outbox_messages', $q$SELECT count(*)>=1 FROM outbox_messages$q$);
-SELECT tt.chk('T-51 dispatcher reads events', $q$SELECT count(*)>=1 FROM events$q$);
+SELECT tt.chk('T-51 dispatcher reads delivery projection', $q$SELECT count(*)>=1 FROM outbox_messages$q$);
+SELECT tt.try('T-51 dispatcher cannot read domain events','err',$q$SELECT count(*) FROM events$q$);
+SELECT tt.try('T-51 dispatcher cannot read event identity','err',$q$SELECT event_id FROM outbox_messages LIMIT 1$q$);
 SELECT tt.try('T-51 dispatcher callers denied','err',$q$SELECT * FROM callers$q$);
 SELECT tt.try('T-51 dispatcher messages denied','err',$q$SELECT * FROM interaction_messages$q$);
-SELECT tt.try('dispatcher mark delivered (delivered_at only)','ok',$q$UPDATE outbox_messages SET delivered_at=now() WHERE delivered_at IS NULL AND delivery_id=(SELECT delivery_id FROM outbox_messages WHERE delivered_at IS NULL ORDER BY created_at,delivery_id LIMIT 1)$q$);
+SELECT tt.try('RUST-051a dispatcher claims delivery with fencing token','ok',$q$
+  UPDATE outbox_messages
+     SET lease_owner='sql-smoke-dispatcher',
+         lease_expires_at=now()+interval '1 minute',
+         claim_token=claim_token+1,
+         attempts=attempts+1
+   WHERE delivered_at IS NULL AND lease_owner IS NULL
+     AND delivery_id=(SELECT delivery_id FROM outbox_messages
+                       WHERE delivered_at IS NULL AND lease_owner IS NULL
+                       ORDER BY created_at,delivery_id LIMIT 1)$q$);
+SELECT tt.try('RUST-051a dispatcher acknowledges and releases lease','ok',$q$
+  UPDATE outbox_messages
+     SET delivered_at=now(), lease_owner=NULL, lease_expires_at=NULL
+   WHERE delivered_at IS NULL AND lease_owner='sql-smoke-dispatcher'$q$);
 SELECT tt.try('dispatcher INSERT outbox_messages denied','err',$q$INSERT INTO outbox_messages(delivery_id,tenant_id,event_id) VALUES (gen_random_uuid(),current_setting('app.tenant_id',true)::uuid,gen_random_uuid())$q$);
 RESET ROLE;
 -- retention may purge delivered rows, but must preserve pending deliveries
