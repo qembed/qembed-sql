@@ -47,3 +47,43 @@ SELECT tt.try('AUDIT-007 Archived object cannot be revived','err',
 SELECT tt.try('AUDIT-007 Archived published pointer cannot be replaced','err',
  $q$UPDATE objects SET published_version_id=NULL WHERE object_id='18000000-0000-0000-0000-000000000001'$q$);
 
+
+-- R3-01 / QSA-014: replacing the currently published version is legal only
+-- when the replacement is published and the Object pointer moves atomically.
+INSERT INTO objects(tenant_id,object_id,state)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+        '18000000-0000-0000-0000-000000000010','draft');
+INSERT INTO object_versions(tenant_id,object_id,object_version_id,version_number,status)
+VALUES ('aaaaaaaa-0000-0000-0000-000000000001',
+        '18000000-0000-0000-0000-000000000010',
+        '18000000-0000-0000-0000-000000000011',1,'draft'),
+       ('aaaaaaaa-0000-0000-0000-000000000001',
+        '18000000-0000-0000-0000-000000000010',
+        '18000000-0000-0000-0000-000000000012',2,'draft');
+UPDATE objects SET state='validating'
+ WHERE object_id='18000000-0000-0000-0000-000000000010';
+UPDATE object_versions SET status='published'
+ WHERE object_version_id='18000000-0000-0000-0000-000000000011';
+UPDATE objects SET state='active', published_version_id='18000000-0000-0000-0000-000000000011'
+ WHERE object_id='18000000-0000-0000-0000-000000000010';
+
+SELECT tt.try('R3-01 cannot supersede the pointed-to version without moving the pointer','err',
+ $q$UPDATE object_versions SET status='superseded'
+      WHERE object_version_id='18000000-0000-0000-0000-000000000011';
+    SET CONSTRAINTS trg_ov_superseded_pointer_check IMMEDIATE$q$);
+SELECT tt.try('R3-01 replacement publication and pointer move commit atomically','ok',
+ $q$UPDATE object_versions SET status='superseded'
+      WHERE object_version_id='18000000-0000-0000-0000-000000000011';
+    UPDATE object_versions SET status='published'
+      WHERE object_version_id='18000000-0000-0000-0000-000000000012';
+    UPDATE objects SET published_version_id='18000000-0000-0000-0000-000000000012'
+      WHERE object_id='18000000-0000-0000-0000-000000000010'$q$);
+SELECT tt.chk('R3-01 replacement is the active published pointer',
+ $q$SELECT o.state='active' AND o.published_version_id='18000000-0000-0000-0000-000000000012'
+       AND old.status='superseded' AND new.status='published'
+     FROM objects o
+     JOIN object_versions old ON old.object_id=o.object_id
+     JOIN object_versions new ON new.object_id=o.object_id
+    WHERE o.object_id='18000000-0000-0000-0000-000000000010'
+      AND old.object_version_id='18000000-0000-0000-0000-000000000011'
+      AND new.object_version_id='18000000-0000-0000-0000-000000000012'$q$);
