@@ -10,15 +10,20 @@ SELECT tt.try('T-50 runtime UPDATE platform ks (0 rows)','ok',$q$UPDATE kill_swi
 SELECT tt.chk('T-50 platform ks unchanged', $q$SELECT enabled=false FROM kill_switches WHERE scope_type='platform'$q$);
 SELECT tt.try('T-50 runtime DELETE platform ks','ok',$q$DELETE FROM kill_switches WHERE scope_type='platform'$q$);
 SELECT tt.chk('T-50 platform ks still there', $q$SELECT count(*)=1 FROM kill_switches WHERE scope_type='platform'$q$);
--- definer functions callable by runtime
+-- Tenant-scoped definer functions remain callable by runtime.
 SELECT tt.chk('authenticate_principal', $q$SELECT count(*)=1 FROM authenticate_principal('\x01')$q$);
 SELECT tt.try('resolve_object_tenant','ok',$q$SELECT resolve_object_tenant('0b000000-0000-0000-0000-000000000001')$q$);
-SELECT tt.try('list_expired_invocation_leases','ok',$q$SELECT * FROM list_expired_invocation_leases(10)$q$);
-SELECT tt.try('list_pending_reconciliations','ok',$q$SELECT * FROM list_pending_reconciliations(10)$q$);
 SELECT tt.try('T-54 runtime cannot call retention_purge','err',$q$SELECT retention_purge('outbox_messages',now(),'x')$q$);
--- sweeper
-SELECT tt.chk('sweeper is idempotent after RUST-041d expiry coverage', $q$SELECT sweep_expired_reservations(10)=0$q$);
-SELECT tt.chk('T-40 sweeper idempotent', $q$SELECT sweep_expired_reservations(10)=0$q$);
+
+-- Cross-tenant discovery and global reservation expiry belong to qembed_worker.
+RESET ROLE;
+SET ROLE qembed_worker;
+SELECT tt.try('QSA-001 worker list_expired_invocation_leases','ok',$q$SELECT * FROM list_expired_invocation_leases(10)$q$);
+SELECT tt.try('QSA-001 worker list_pending_reconciliations','ok',$q$SELECT * FROM list_pending_reconciliations(10)$q$);
+SELECT tt.chk('QSA-001 worker sweeper is idempotent after RUST-041d expiry coverage', $q$SELECT sweep_expired_reservations(10)=0$q$);
+SELECT tt.chk('QSA-001 worker T-40 sweeper idempotent', $q$SELECT sweep_expired_reservations(10)=0$q$);
+RESET ROLE;
+SET ROLE qembed_runtime;
 SELECT tt.chk('usage_counters reserved released', $q$SELECT reserved_tokens=0 FROM usage_counters$q$);
 SELECT tt.chk('R3-04 caller_usage_counters reserved released', $q$SELECT reserved_tokens=0 FROM caller_usage_counters$q$);
 -- knowledge flow
