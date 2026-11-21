@@ -1810,8 +1810,7 @@ GRANT UPDATE (revoked_at) ON callers TO qembed_definer;          -- row lock for
 GRANT SELECT, INSERT, UPDATE ON principal_caller_delegations TO qembed_definer;
 GRANT SELECT, UPDATE ON budget_reservations, provider_call_attempts, usage_counters, tool_executions TO qembed_definer;
 GRANT SELECT, DELETE ON interaction_messages, memories, invocation_idempotency,
-  tool_command_payloads TO qembed_definer;
-GRANT SELECT ON outbox_messages TO qembed_definer;
+  tool_command_payloads, outbox_messages TO qembed_definer;
 GRANT UPDATE (heartbeat_at) ON object_invocations TO qembed_definer; -- row lock for replay eligibility
 GRANT UPDATE (replay_requested_at, replay_reason, replay_count)
   ON outbox_messages TO qembed_definer;
