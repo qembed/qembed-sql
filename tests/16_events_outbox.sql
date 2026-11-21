@@ -29,9 +29,9 @@ SELECT tt.chk('RUST-051a outbox lease fencing columns and defaults exist',
    (SELECT column_default LIKE '%0%' FROM information_schema.columns
      WHERE table_schema='public' AND table_name='outbox_messages' AND column_name='attempts')
    AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.outbox_messages'::regclass
-     AND conname='outbox_messages_check')
+     AND conname='outbox_lease_pair')
    AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.outbox_messages'::regclass
-     AND conname='outbox_messages_check1')$q$);
+     AND conname='outbox_delivered_unleased')$q$);
 
 SELECT tt.chk('AUDIT-005 pending outbox index matches delivered_at predicate',
  $q$SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public'
