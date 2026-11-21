@@ -22,7 +22,7 @@
 
 ## Validation status
 - r3 baseline: PostgreSQL 16 + pgvector 0.8.0, smoke-набор 103/103 (r1 на том же наборе: 12 падений).
-- r4 current master: PostgreSQL 19 + pgvector 0.8.7 smoke suite passed 418/418 after QSA-011 remediation. Это результат smoke suite, а не подтверждение прохождения всех T-01…T-64 acceptance-пунктов.
+- r4 current master: PostgreSQL 19 + pgvector 0.8.7 smoke suite passed 421/421 after QSA-010 remediation. Это результат smoke suite, а не подтверждение прохождения всех T-01…T-64 acceptance-пунктов.
 - Not yet validated: полный T-01…T-64 acceptance, multi-session concurrency/fencing, Rust JCS, SSRF, failure-injection и upgrade. PostgreSQL 15/16 не являются текущей целевой CI-конфигурацией. Заявления о production-готовности нет.
 - **B-01…B-09:** список замечаний и отчёт r2 в присланный архив не входили; r3 не утверждает закрытие B-01…B-09 и не сопоставляет с ними R3-01…R3-06. Пришлите список — сверю.
 
@@ -142,7 +142,7 @@ Rust-репозиторий — неизменяемый источник кон
 ### AUDIT-010: SECURITY DEFINER hardening
 - Revoke `CREATE` on schema `public` from `PUBLIC` and application roles. QSA-002 pins the event allocator, embedding dimension guard, and published-pointer guard to `pg_catalog, public, pg_temp`; all 11 SECURITY DEFINER functions are catalog-checked for this path. See verified PR #28.
 - QSA-001 moves cross-tenant lease/reconciliation discovery and global reservation expiry to the isolated `qembed_worker` role; `qembed_runtime` no longer has EXECUTE on those entry points. See verified PR #29.
-- QSA-005 makes Caller revocation final (PR #31); QSA-007 preserves pending outbox replay during retention (PR #30). QSA-004 closes the GUC interval bypass (PR #34); QSA-006 preserves platform ownership of tenant kill switches (PR #35); QSA-011 enforces pgvector >=0.8.7 (PR #36).
+- QSA-005 makes Caller revocation final (PR #31); QSA-007 preserves pending outbox replay during retention (PR #30). QSA-004 closes the GUC interval bypass (PR #34); QSA-006 preserves platform ownership of tenant kill switches (PR #35); QSA-011 enforces pgvector >=0.8.7 (PR #36). QSA-010 makes reservation expiry robust to counter drift (PR #42).
 - Add regression checks for the definer role attributes and membership isolation; function ownership, SECURITY DEFINER flag, fixed `pg_catalog, public, pg_temp` search_path and PUBLIC execute revocation; and the intended runtime/retention/admin/dispatcher EXECUTE matrix.
 - Assert the narrow table privileges held by `qembed_definer`.
 - Exercise the retention whitelist with a hostile table argument and a SQL-looking reason string, proving that the former is rejected and the latter is stored as literal data.

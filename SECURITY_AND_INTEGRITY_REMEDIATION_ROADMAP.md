@@ -224,14 +224,16 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-010 — Make reservation sweeper robust against counter drift
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `IN_PROGRESS` — remediation is [PR #42](https://github.com/qembed/qembed-sql/pull/42). Aggregate token and cost counters are clamped at zero on expiry; a regression test simulates drift below the reservation amount and requires the worker batch to complete.
+**Current status:** `VERIFIED` — merged in [PR #42](https://github.com/qembed/qembed-sql/pull/42), commit `bd2dfc85c2b4f54d3bab088914a2da6c413a4069`. PostgreSQL 19 / pgvector 0.8.7 smoke suite passed 421/421 on the PR head and again post-merge.
 
-- [ ] Inspect current `usage_counters` and `caller_usage_counters` release logic.
-- [ ] Decide whether counters must fail closed on drift or clamp at zero; do not hide accounting corruption without an explicit invariant.
-- [ ] Ensure one inconsistent counter cannot cause an unexpected partial or batch-wide failure.
-- [ ] Add tests for exact balance, zero balance, and drift/underflow behavior.
+**Chosen invariant:** reservation expiry uses saturating decrements (`GREATEST(0, current - reserved)`) for aggregate token and cost counters, matching the existing Caller counter behavior. This keeps one drifted counter from aborting the worker batch. It does not itself diagnose or persist the source of counter drift; anomaly accounting is a separate follow-up if required.
 
-**Acceptance:** reservation expiry has deterministic, tested behavior under counter drift and cannot silently create negative usage.
+- [x] Inspect current `usage_counters` and `caller_usage_counters` release logic.
+- [x] Choose and document saturating release semantics for counter drift.
+- [x] Ensure one inconsistent counter cannot cause an unexpected batch-wide failure.
+- [x] Add a regression test for underflow/drift; normal exact-balance release remains covered by the existing lifecycle tests.
+
+**Acceptance:** reservation expiry has deterministic, tested behavior under counter drift and cannot create negative usage or abort the batch.
 
 ### QSA-011 — Enforce pgvector minimum version 0.8.7 including patch comparison
 
@@ -334,7 +336,7 @@ Every remediation PR must include:
 | QSA-007 | PR #30; 400/400 PR-head and post-merge | [PR #30](https://github.com/qembed/qembed-sql/pull/30) | 400/400 | VERIFIED |
 | QSA-008 | Future principal/memory model; no current Rust memory write adapter | — | N/A | DEFERRED_TO_FUTURE_FEATURE |
 | QSA-009 | Combined CHECK constraints; runtime negative test PR #39; 420/420 | [PR #39](https://github.com/qembed/qembed-sql/pull/39) | 420/420 | NOT_REPRODUCED |
-| QSA-010 | Counter underflow clamp and drift regression test in PR #42 | [PR #40](https://github.com/qembed/qembed-sql/pull/40) | Pending | IN_PROGRESS |
+| QSA-010 | PR #42; 421/421 PR-head and post-merge | [PR #42](https://github.com/qembed/qembed-sql/pull/42) | 421/421 | VERIFIED |
 | QSA-011 | PR #36; 418/418 PR-head and post-merge | [PR #36](https://github.com/qembed/qembed-sql/pull/36) | 418/418 | VERIFIED |
 | QSA-012 | ADR RUST-044 assigns exact-byte dedup check to Rust; read-time corruption test pending | — | Pending | DEFERRED_TO_RUST |
 | QSA-013–018 | Pending | — | Pending | REVALIDATE |
