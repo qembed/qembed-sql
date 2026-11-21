@@ -193,7 +193,7 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-008 — Reconcile verified-memory principal foreign keys with the Rust auth model
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `VERIFIED` — fixed on current `master` by commit [dfc519e4](https://github.com/qembed/qembed-sql/commit/dfc519e4d70a2d438ef0a4472caf1d6994097f9f). The extension gate now rejects versions below 0.8.7, compares numeric major/minor/patch components, and removes the session-GUC override for older versions. Version regression tests and PostgreSQL 19 / pgvector 0.8.7 CI passed ([run #44936931332](https://github.com/qembed/qembed-sql/actions/runs/44936931332)).
+**Current status:** `REVALIDATE`
 
 - [ ] Trace `memories_verified_guard`, its FK targets, and every Rust/SQL write path for Principal identity.
 - [ ] Determine whether `principals` and `owner_principals` intentionally represent distinct identities or whether this is a broken integration.
@@ -229,13 +229,13 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-011 — Enforce pgvector minimum version 0.8.7 including patch comparison
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `REVALIDATE`
+**Current status:** `VERIFIED` — fixed on current `master` by commit [dfc519e4](https://github.com/qembed/qembed-sql/commit/dfc519e4d70a2d438ef0a4472caf1d6994097f9f). The extension gate now rejects versions below 0.8.7, compares numeric major/minor/patch components, and removes the session-GUC override for older versions. Version regression tests and PostgreSQL 19 / pgvector 0.8.7 CI passed ([run #44936931332](https://github.com/qembed/qembed-sql/actions/runs/44936931332)).
 
-- [ ] Inspect the actual extension-version gate and CI matrix.
-- [ ] Reject pgvector versions below 0.8.7, including earlier 0.8.x patch releases.
-- [ ] Compare the full semantic version, not only major/minor.
-- [ ] Add tests for 0.8.0, 0.8.6, 0.8.7, and a later compatible release.
-- [ ] Ensure CI provisions the exact target version.
+- [x] Inspect the actual extension-version gate and CI matrix.
+- [x] Reject pgvector versions below 0.8.7, including earlier 0.8.x patch releases.
+- [x] Compare the full semantic version, not only major/minor.
+- [x] Add tests for 0.8.0, 0.8.6, 0.8.7, and a later compatible release.
+- [x] Ensure CI provisions the exact target version.
 
 **Acceptance:** clean install refuses unsupported pgvector versions and accepts 0.8.7 or later according to the documented compatibility policy.
 
