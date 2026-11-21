@@ -187,7 +187,6 @@ CREATE TABLE objects (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, object_id),
-  UNIQUE (object_id),
   CHECK (state NOT IN ('active','suspended') OR published_version_id IS NOT NULL)
 );
 
@@ -204,7 +203,6 @@ CREATE TABLE object_versions (
   published_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (status <> 'draft' OR published_at IS NULL),
   PRIMARY KEY (tenant_id, object_id, object_version_id),
-  UNIQUE (object_version_id),
   UNIQUE (tenant_id, object_id, version_number),
   FOREIGN KEY (tenant_id, object_id) REFERENCES objects(tenant_id, object_id)
     ON DELETE RESTRICT
@@ -419,7 +417,6 @@ CREATE TABLE snapshots (
   json_projection JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, snapshot_id),
-  UNIQUE (snapshot_id),
   UNIQUE (tenant_id, object_id, content_hash),
   UNIQUE (tenant_id, object_id, snapshot_id),            -- target of composite FKs from invocations/decisions
   FOREIGN KEY (tenant_id, object_id, object_version_id)
@@ -926,7 +923,6 @@ CREATE TABLE events (
   payload JSONB NOT NULL,
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, event_id),
-  UNIQUE (event_id),
   CONSTRAINT events_stream_version_unique UNIQUE (tenant_id, aggregate_type, aggregate_id, stream_version)
 );
 
@@ -1669,10 +1665,16 @@ BEGIN
 END
 $resolve_delegated_caller$;
 
-CREATE FUNCTION resolve_object_tenant(p_object_id UUID)
-RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
-  SELECT tenant_id FROM objects WHERE object_id = p_object_id
-$$;
+CREATE FUNCTION resolve_object_tenant(p_tenant_id UUID, p_object_id UUID)
+RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $qsa017_resolve$
+  -- The caller must supply its already-authenticated tenant scope. This avoids
+  -- requiring globally unique ObjectIds (and prevents this helper from becoming
+  -- a cross-tenant object-existence oracle).
+  SELECT tenant_id FROM objects
+   WHERE tenant_id = p_tenant_id
+     AND object_id = p_object_id
+     AND p_tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+$qsa017_resolve$;
 
 -- Cross-tenant discovery for background workers (A3): returns identifiers only;
 -- the worker then acts under the proper Scope (SET LOCAL app.tenant_id).
@@ -1824,7 +1826,7 @@ END $$;
 DO $qsa001_ownership$
 DECLARE f TEXT;
 BEGIN
-  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid)',
+  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid,uuid)',
      'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
      'sweep_expired_reservations(integer)','sweep_stale_invocation_deliveries(timestamp with time zone,integer)',
      'retention_purge(text,timestamptz,text)','knowledge_documents_sync()'] LOOP
@@ -1863,7 +1865,7 @@ GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddin
   knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
 GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid),
-  revoke_caller_delegation(uuid), resolve_delegated_caller(uuid), resolve_object_tenant(uuid),
+  revoke_caller_delegation(uuid), resolve_delegated_caller(uuid), resolve_object_tenant(uuid,uuid),
   sweep_stale_invocation_deliveries(timestamptz,integer) TO qembed_runtime;
 
 -- Cross-tenant discovery and global reservation expiry are worker-only.

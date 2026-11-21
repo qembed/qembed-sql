@@ -62,17 +62,13 @@ SELECT tt.chk('AUDIT-001/004/005 column contract (type, NOT NULL, default) of Ru
 SELECT tt.chk('AUDIT-001/005 PK/UNIQUE/FK column lists match the Rust constraints',
  $q$WITH want(t,ty,cols,rt,rcols) AS (VALUES
    ('objects','p','tenant_id,object_id',NULL::text,NULL::text),
-   ('objects','u','object_id',NULL,NULL),
    ('objects','f','tenant_id,object_id,published_version_id','object_versions','tenant_id,object_id,object_version_id'),
    ('object_versions','p','tenant_id,object_id,object_version_id',NULL,NULL),
-   ('object_versions','u','object_version_id',NULL,NULL),
    ('object_versions','u','tenant_id,object_id,version_number',NULL,NULL),
    ('object_versions','f','tenant_id,object_id','objects','tenant_id,object_id'),
    ('snapshots','p','tenant_id,snapshot_id',NULL,NULL),
-   ('snapshots','u','snapshot_id',NULL,NULL),
    ('snapshots','f','tenant_id,object_id,object_version_id','object_versions','tenant_id,object_id,object_version_id'),
    ('events','p','tenant_id,event_id',NULL,NULL),
-   ('events','u','event_id',NULL,NULL),
    ('outbox_messages','p','tenant_id,delivery_id',NULL,NULL),
    ('outbox_messages','u','tenant_id,event_id',NULL,NULL),
    ('outbox_messages','f','tenant_id,event_id','events','tenant_id,event_id')
