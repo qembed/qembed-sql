@@ -92,7 +92,7 @@ Rust-репозиторий — неизменяемый источник кон
 ### AUDIT-005: events and outbox
 - `events` and `outbox_messages` now use the exact Rust migration columns, defaults, primary/unique keys and tenant-consistent outbox FK.
 - Event ordering uses `events_aggregate_order_idx`; events reject UPDATE/DELETE with SQLSTATE `55000`.
-- Outbox delivery state is represented only by nullable `delivered_at`. The dispatcher can update that column, not event identity or payload.
+- Outbox delivery state uses nullable `delivered_at` plus dispatcher lease owner/expiry, monotonic `claim_token`, and `attempts`. Claims are fenced and reclaimable; the dispatcher can read only the delivery projection and cannot read `events` or `event_id`.
 - The pending index is `(created_at, delivery_id) WHERE delivered_at IS NULL`. Retention removes only delivered rows older than the cutoff; undelivered messages are retained.
 - Regression coverage is in `tests/16_events_outbox.sql`; the Rust physical contract assertions and smoke runner include AUDIT-005.
 
