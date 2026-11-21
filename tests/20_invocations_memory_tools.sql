@@ -62,6 +62,13 @@ SELECT tt.try('payload ok','ok',$q$INSERT INTO tool_command_payloads(tenant_id,c
 SELECT tt.try('payload hash mismatch','err',$q$UPDATE tool_command_payloads SET arguments_hash=digest('zz','sha256')$q$);
 SELECT tt.try('exec Authorized','ok',$q$INSERT INTO tool_executions(id,tenant_id,object_id,invocation_id,caller_id,decision_id,command_id,tool_id,tool_version_id,snapshot_id,binding_version,operation,arguments_hash,status)
  VALUES ('ee000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','1a000000-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000001','d1000000-0000-0000-0000-000000000001','c0000000-0000-0000-0000-000000000001','11111111-0000-0000-0000-000000000001','11111111-0000-0000-0000-0000000000a2','5a000000-0000-0000-0000-000000000001',2,'op',digest('a','sha256'),'Authorized')$q$);
+SELECT tt.try('QSA-009 Executing cannot be claimed without lease_until','err',$q$UPDATE tool_executions
+ SET status='Executing',lease_owner='worker-without-expiry',lease_until=NULL,
+     heartbeat_at=now(),fencing_token=1,version=1
+ WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.chk('QSA-009 rejected lease-less claim leaves ToolExecution Authorized',
+ $q$SELECT status='Authorized' AND lease_owner IS NULL AND lease_until IS NULL
+      FROM tool_executions WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
 SELECT tt.chk('ToolExecution starts with its own version/token zero',
  $q$SELECT version=0 AND fencing_token=0 AND lease_owner IS NULL AND heartbeat_at IS NULL
       FROM tool_executions WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
