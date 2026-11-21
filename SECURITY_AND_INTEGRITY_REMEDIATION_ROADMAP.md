@@ -4,7 +4,7 @@
 **Status:** Active; audit findings require revalidation against current `master`  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
-**Roadmap branch base:** `67217d7f14cb197a7bbc8901eea0811de84a5c29`  
+**Roadmap branch base:** `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`  
 **Validation target:** PostgreSQL 19 + pgvector 0.8.7  
 **Rule:** No finding is closed by documentation, code inspection alone, or a green legacy smoke suite. Closure requires a regression test that fails before the fix and passes after it, plus recorded validation evidence.
 
@@ -116,7 +116,9 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `SOURCE_CONFIRMED` — current schema still authorizes runtime UPDATE on `knowledge_chunks` and uses caller-settable `qembed.interval_sync` as the guard bypass; current-base live test remains pending.
+**Current status:** `VERIFIED` — merged in [PR #34](https://github.com/qembed/qembed-sql/pull/34), commit `5490d855f9ef9a97d255987747ceb6e0c75f6062`. PostgreSQL 19 / pgvector 0.8.7 smoke suite passed 409/409 on the PR head and again post-merge.
+
+**Implementation:** the GUC is no longer an authorization signal. `knowledge_documents_sync()` runs as a narrowly privileged SECURITY DEFINER trigger owner; only interval-column UPDATE and predicate-column SELECT are granted on `knowledge_chunks`. Runtime cannot forge authority by setting the old GUC.
 
 **Reported behavior:** a runtime role with UPDATE on `knowledge_chunks` could set `qembed.interval_sync = 'on'` and modify validity intervals directly, bypassing the intended document-revision synchronization guard.
 
@@ -152,7 +154,9 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `SOURCE_CONFIRMED` / policy decision required — current `ks_write` policy is `FOR ALL` for the current tenant, and runtime has DELETE privilege. Existing T-50 coverage only exercises the platform-global (`tenant_id IS NULL`) row, not a tenant-scoped switch.
+**Current status:** `VERIFIED` — merged in [PR #35](https://github.com/qembed/qembed-sql/pull/35), commit `aee409469e72f897799623eedbd01c854fbb9c33`. PostgreSQL 19 / pgvector 0.8.7 smoke suite passed 416/416 on the PR head and again post-merge.
+
+**Implementation:** each switch records immutable `managed_by_role` assigned from actual role membership. Runtime can manage its own switches but cannot disable/delete a tenant-scoped switch created by `qembed_admin`.
 
 **Reported behavior:** policy `ks_write` appeared to allow the runtime role to delete a tenant's kill-switch row, while the `T-50` check constrained only the `platform` value.
 
@@ -193,7 +197,9 @@ These findings were inferred from DDL rather than reproduced in the original aud
 ### QSA-008 — Reconcile verified-memory principal foreign keys with the Rust auth model
 
 **Reported severity:** Medium (inferred)  
-**Current status:** `REVALIDATE`
+**Current status:** `VERIFIED` — merged in [PR #36](https://github.com/qembed/qembed-sql/pull/36), commit `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`. PostgreSQL 19 / pgvector 0.8.7 smoke suite passed 418/418 on the PR head and again post-merge.
+
+**Implementation:** the schema now rejects pgvector below 0.8.7, compares numeric major/minor/patch components, and has no session-GUC override.
 
 - [ ] Trace `memories_verified_guard`, its FK targets, and every Rust/SQL write path for Principal identity.
 - [ ] Determine whether `principals` and `owner_principals` intentionally represent distinct identities or whether this is a broken integration.
@@ -321,14 +327,14 @@ Every remediation PR must include:
 | QSA-001 | PR #29; 396/396 PR-head and post-merge | [PR #29](https://github.com/qembed/qembed-sql/pull/29) | 396/396 | VERIFIED |
 | QSA-002 | PR #28; 388/388 PR-head and post-merge | [PR #28](https://github.com/qembed/qembed-sql/pull/28) | 388/388 | VERIFIED |
 | QSA-003 | Source-confirmed: GUC trust boundary documented in schema | — | Pending | SOURCE_CONFIRMED |
-| QSA-004 | Source-confirmed: caller-settable bypass remains | — | Pending | SOURCE_CONFIRMED |
+| QSA-004 | PR #34; 409/409 PR-head and post-merge | [PR #34](https://github.com/qembed/qembed-sql/pull/34) | 409/409 | VERIFIED |
 | QSA-005 | PR #31; 404/404 PR-head and post-merge | [PR #31](https://github.com/qembed/qembed-sql/pull/31) | 404/404 | VERIFIED |
-| QSA-006 | Source-confirmed: tenant-scoped FOR ALL policy + DELETE grant | — | Pending | SOURCE_CONFIRMED |
+| QSA-006 | PR #35; 416/416 PR-head and post-merge | [PR #35](https://github.com/qembed/qembed-sql/pull/35) | 416/416 | VERIFIED |
 | QSA-007 | PR #30; 400/400 PR-head and post-merge | [PR #30](https://github.com/qembed/qembed-sql/pull/30) | 400/400 | VERIFIED |
 | QSA-008 | Pending | — | Pending | REVALIDATE |
 | QSA-009 | Pending | — | Pending | REVALIDATE |
 | QSA-010 | Pending | — | Pending | REVALIDATE |
-| QSA-011 | Pending | — | Pending | REVALIDATE |
+| QSA-011 | PR #36; 418/418 PR-head and post-merge | [PR #36](https://github.com/qembed/qembed-sql/pull/36) | 418/418 | VERIFIED |
 | QSA-012 | Pending | — | Pending | REVALIDATE |
 | QSA-013–018 | Pending | — | Pending | REVALIDATE |
 | QSA-019–023 | Pending | — | Pending | REVALIDATE |
@@ -344,6 +350,6 @@ The initial findings were supplied from an adversarial audit of commit `164da3c`
 - QSA-013 through QSA-018 were reported as minor observations.
 - QSA-019 through QSA-023 were catalog-based performance observations, not measured.
 
-The current repository base for this roadmap is `67217d7f14cb197a7bbc8901eea0811de84a5c29`. QSA-001, QSA-002, and QSA-007 have since been remediated and independently re-run through the PostgreSQL 19 / pgvector 0.8.7 smoke workflow. Remaining findings still require revalidation against this exact base before remediation. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
+The current repository base for this roadmap is `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`. QSA-001, QSA-002, and QSA-007 have since been remediated and independently re-run through the PostgreSQL 19 / pgvector 0.8.7 smoke workflow. Remaining findings still require revalidation against this exact base before remediation. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
 
 This roadmap records the remediation program; it does not itself certify the schema as secure or production-ready.
