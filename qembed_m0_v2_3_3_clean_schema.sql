@@ -666,22 +666,23 @@ BEGIN
   IF NEW.content IS DISTINCT FROM OLD.content AND NOT (NEW.erased AND NOT OLD.erased)
   THEN RAISE EXCEPTION 'chunk content is immutable (only erasure allowed)'; END IF;
   IF (NEW.valid_from_revision, NEW.valid_to_revision) IS DISTINCT FROM (OLD.valid_from_revision, OLD.valid_to_revision)
-     AND coalesce(current_setting('qembed.interval_sync', true), '') <> 'on'
-  THEN RAISE EXCEPTION 'chunk interval is changed only by revision commit'; END IF;
+     AND current_user <> 'qembed_definer'
+  THEN RAISE EXCEPTION 'chunk interval is changed only by the trusted revision-sync trigger'; END IF;
   RETURN NEW;
 END $$;
 CREATE TRIGGER trg_chunks_guard BEFORE UPDATE ON knowledge_chunks
   FOR EACH ROW EXECUTE FUNCTION knowledge_chunks_guard();
 
-CREATE FUNCTION knowledge_documents_sync() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION knowledge_documents_sync() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp AS $knowledge_documents_sync$
 BEGIN
-  PERFORM set_config('qembed.interval_sync', 'on', true);
   UPDATE knowledge_chunks
      SET valid_from_revision = NEW.valid_from_revision, valid_to_revision = NEW.valid_to_revision
    WHERE tenant_id = NEW.tenant_id AND object_id = NEW.object_id AND document_id = NEW.id;
-  PERFORM set_config('qembed.interval_sync', 'off', true);
   RETURN NEW;
-END $$;
+END
+$knowledge_documents_sync$;
 CREATE TRIGGER trg_docs_sync AFTER UPDATE OF valid_from_revision, valid_to_revision ON knowledge_documents
   FOR EACH ROW EXECUTE FUNCTION knowledge_documents_sync();
 
@@ -1370,7 +1371,7 @@ DECLARE t TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY['objects','object_invocations','callers','principal_caller_delegations','budget_reservations',
       'provider_call_attempts','usage_counters','caller_usage_counters','tool_executions','tool_command_payloads',
-      'interaction_messages','memories','invocation_idempotency','outbox_messages'] LOOP
+      'interaction_messages','memories','invocation_idempotency','outbox_messages','knowledge_chunks'] LOOP
     EXECUTE format('CREATE POLICY definer_access ON %I TO qembed_definer USING (true) WITH CHECK (true)', t);
   END LOOP;
 END $$;
@@ -1769,7 +1770,7 @@ BEGIN
   FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid)',
      'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
      'sweep_expired_reservations(integer)','sweep_stale_invocation_deliveries(timestamp with time zone,integer)',
-     'retention_purge(text,timestamptz,text)'] LOOP
+     'retention_purge(text,timestamptz,text)','knowledge_documents_sync()'] LOOP
     EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
   END LOOP;
@@ -1858,6 +1859,9 @@ GRANT UPDATE (replay_requested_at, replay_reason, replay_count)
 GRANT SELECT, UPDATE ON caller_usage_counters TO qembed_definer;   -- r3: sweeper releases per-caller reservations
 GRANT INSERT ON retention_log TO qembed_definer;
 GRANT USAGE, SELECT ON SEQUENCE retention_log_id_seq TO qembed_definer;
+GRANT SELECT (tenant_id, object_id, document_id) ON knowledge_chunks TO qembed_definer;
+GRANT UPDATE (valid_from_revision, valid_to_revision) ON knowledge_chunks TO qembed_definer;
+REVOKE ALL ON FUNCTION knowledge_documents_sync() FROM PUBLIC, qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention, qembed_worker;
 
 -- -----------------------------------------------------------------------------
 -- 18. Migration audit: fail if any public table lacks RLS/FORCE, outside the allowlist
