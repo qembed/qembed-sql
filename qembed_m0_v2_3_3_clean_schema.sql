@@ -1741,7 +1741,7 @@ BEGIN
 END $$;
 
 -- ownership: functions must be owned by qembed_definer
-DO $$
+DO $qsa001_ownership$
 DECLARE f TEXT;
 BEGIN
   FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid)',
@@ -1751,7 +1751,7 @@ BEGIN
     EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
   END LOOP;
-END $;
+END $qsa001_ownership$;
 
 -- Remove any inherited or pre-existing function grants before adding the
 -- worker's narrow allowlist below.
