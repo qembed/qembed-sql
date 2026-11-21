@@ -2,6 +2,9 @@
 SET client_min_messages=warning;
 SET track_io_timing=on;
 
+-- Preserve a true no-index baseline after the canonical schema adds this index.
+DROP INDEX IF EXISTS idx_outbox_invocation_recovery;
+
 -- QSA-022 controlled PG19 workload: 100k invocation.received outbox rows,
 -- only two of which point to real stale invocations. The exact recovery join
 -- matches payload->>'invocation_id' and the partial-index predicates.
