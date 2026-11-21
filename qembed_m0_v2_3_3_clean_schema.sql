@@ -1180,11 +1180,26 @@ CREATE FUNCTION kill_switches_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $kill_switches_guard$
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    NEW.managed_by_role := current_user;
+    IF pg_has_role(current_user, 'qembed_admin', 'MEMBER') THEN
+      NEW.managed_by_role := 'qembed_admin';
+    ELSIF pg_has_role(current_user, 'qembed_runtime', 'MEMBER') THEN
+      NEW.managed_by_role := 'qembed_runtime';
+    ELSE
+      NEW.managed_by_role := current_user;
+    END IF;
     RETURN NEW;
   END IF;
 
-  IF OLD.managed_by_role <> current_user AND current_user <> 'qembed_admin' THEN
+  IF OLD.managed_by_role = 'qembed_admin'
+     AND NOT pg_has_role(current_user, 'qembed_admin', 'MEMBER') THEN
+    RAISE EXCEPTION 'kill switch is managed by platform operations'
+      USING ERRCODE = '42501';
+  ELSIF OLD.managed_by_role = 'qembed_runtime'
+     AND NOT pg_has_role(current_user, 'qembed_runtime', 'MEMBER') THEN
+    RAISE EXCEPTION 'kill switch is managed by a different authority'
+      USING ERRCODE = '42501';
+  ELSIF OLD.managed_by_role NOT IN ('qembed_admin','qembed_runtime')
+     AND OLD.managed_by_role <> current_user THEN
     RAISE EXCEPTION 'kill switch is managed by a privileged role'
       USING ERRCODE = '42501';
   END IF;
