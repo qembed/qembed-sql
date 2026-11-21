@@ -4,7 +4,7 @@
 **Status:** Active; audit findings require revalidation against current `master`  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
-**Roadmap branch base:** `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`  
+**Roadmap branch base:** `5b7b752f8e779629ddea35ca083d3c0c07c595aa`  
 **Validation target:** PostgreSQL 19 + pgvector 0.8.7  
 **Rule:** No finding is closed by documentation, code inspection alone, or a green legacy smoke suite. Closure requires a regression test that fails before the fix and passes after it, plus recorded validation evidence.
 
@@ -15,7 +15,7 @@
 This roadmap supersedes the ordinary SQL feature backlog while any P0 item is open.
 
 1. **P0 freeze:** do not start unrelated SQL features until all P0 items below are closed or explicitly accepted through a documented threat-model decision by the project owner.
-2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current remediation base is `04d86be8a771c6e24f05379ac415216ac6467916`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
+2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current remediation base is `5b7b752f8e779629ddea35ca083d3c0c07c595aa`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
 3. **One security boundary per PR:** prefer small, independently reviewable PRs. Do not combine unrelated role, RLS, trigger, retention, or dependency changes.
 4. **Negative tests are mandatory:** tests must prove that the forbidden operation fails or reveals no data, not merely that the intended operation succeeds.
 5. **Test with the real application role:** tests run as superuser or schema owner do not prove runtime-role isolation. Include role switching and realistic grants.
@@ -235,11 +235,11 @@ These findings were inferred from DDL rather than reproduced in the original aud
 **Reported severity:** Medium (inferred)  
 **Current status:** `VERIFIED` — merged in [PR #36](https://github.com/qembed/qembed-sql/pull/36), commit `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`. PostgreSQL 19 / pgvector 0.8.7 smoke suite passed 418/418 on the PR head and again post-merge.
 
-- [ ] Inspect the actual extension-version gate and CI matrix.
-- [ ] Reject pgvector versions below 0.8.7, including earlier 0.8.x patch releases.
-- [ ] Compare the full semantic version, not only major/minor.
-- [ ] Add tests for 0.8.0, 0.8.6, 0.8.7, and a later compatible release.
-- [ ] Ensure CI provisions the exact target version.
+- [x] Inspect the actual extension-version gate and CI matrix.
+- [x] Reject pgvector versions below 0.8.7, including earlier 0.8.x patch releases.
+- [x] Compare the full semantic version, not only major/minor.
+- [x] Add tests for 0.8.0, 0.8.6, 0.8.7, and a later compatible release.
+- [x] Ensure CI provisions the exact target version.
 
 **Acceptance:** clean install refuses unsupported pgvector versions and accepts 0.8.7 or later according to the documented compatibility policy.
 
@@ -348,6 +348,6 @@ The initial findings were supplied from an adversarial audit of commit `164da3c`
 - QSA-013 through QSA-018 were reported as minor observations.
 - QSA-019 through QSA-023 were catalog-based performance observations, not measured.
 
-The current repository base for this roadmap is `dfc519e4d70a2d438ef0a4472caf1d6994097f9f`. QSA-001, QSA-002, and QSA-007 have since been remediated and independently re-run through the PostgreSQL 19 / pgvector 0.8.7 smoke workflow. Remaining findings still require revalidation against this exact base before remediation. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
+The current repository base for this roadmap update is `5b7b752f8e779629ddea35ca083d3c0c07c595aa`. QSA-001, QSA-002, QSA-004, QSA-005, QSA-006, QSA-007, and QSA-011 have verified remediation evidence on PostgreSQL 19 + pgvector 0.8.7 (latest master smoke suite: 418/418). QSA-003 remains an explicit trust-boundary decision; QSA-008 is source-confirmed as a cross-repository Principal-model question; QSA-009, QSA-010, QSA-012…QSA-023 require revalidation against this current baseline. The original audit is evidence and a prioritized test plan, not proof that every reported condition remains present. The supplied audit is evidence and a prioritized test plan, not a substitute for inspecting current source and behavior.
 
 This roadmap records the remediation program; it does not itself certify the schema as secure or production-ready.
