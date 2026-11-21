@@ -1728,7 +1728,8 @@ BEGIN
   ELSIF p_table = 'tool_command_payloads' THEN
     DELETE FROM tool_command_payloads WHERE expires_at < p_cutoff;
   ELSIF p_table = 'outbox_messages' THEN
-    DELETE FROM outbox_messages WHERE delivered_at IS NOT NULL AND created_at < p_cutoff;
+    DELETE FROM outbox_messages
+     WHERE delivered_at IS NOT NULL AND replay_requested_at IS NULL AND created_at < p_cutoff;
   ELSIF p_table = 'tool_executions' THEN   -- nullify output, keep the audit row
     UPDATE tool_executions SET output = NULL, output_expires_at = NULL
      WHERE output IS NOT NULL AND output_expires_at < p_cutoff;
