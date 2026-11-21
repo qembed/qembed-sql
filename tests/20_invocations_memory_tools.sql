@@ -79,6 +79,13 @@ SELECT tt.try('ToolExecution heartbeat retains version and fence','ok',$q$UPDATE
 SELECT tt.chk('heartbeat does not advance version or fencing token',
  $q$SELECT version=1 AND fencing_token=1 FROM tool_executions
       WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.try('heartbeat can refresh without shortening a longer lease','ok',$q$UPDATE tool_executions
+ SET lease_until=lease_until,heartbeat_at=clock_timestamp()
+ WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+SELECT tt.try('heartbeat cannot shorten an existing lease','err',$q$UPDATE tool_executions
+ SET lease_until=now()+interval '1 second',heartbeat_at=clock_timestamp()
+ WHERE id='ee000000-0000-0000-0000-000000000001'$q$);
+
 SELECT tt.try('stale ToolExecution fence cannot commit','err',$q$UPDATE tool_executions
  SET status='Succeeded',lease_owner=NULL,lease_until=NULL,heartbeat_at=NULL,
      finished_at=now(),version=2,fencing_token=0

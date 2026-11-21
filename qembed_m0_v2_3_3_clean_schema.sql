@@ -2170,7 +2170,7 @@ BEGIN
     IF NOT heartbeat_only OR OLD.lease_until <= clock_timestamp()
        OR NEW.lease_owner IS DISTINCT FROM OLD.lease_owner
        OR NEW.fencing_token <> OLD.fencing_token
-       OR NEW.lease_until <= OLD.lease_until
+       OR NEW.lease_until < OLD.lease_until
        OR NEW.lease_until <= clock_timestamp()
        OR NEW.heartbeat_at IS NULL OR NEW.heartbeat_at < OLD.heartbeat_at THEN
       RAISE EXCEPTION 'heartbeat must extend the current live lease without changing execution state'
