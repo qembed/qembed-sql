@@ -55,7 +55,7 @@ SELECT tt.chk('RUST-052c replay_count default is exactly zero',
 
 SELECT tt.chk('RUST-052c replay marker constraint is validated and exact',
  $q$SELECT convalidated
-        AND regexp_replace(pg_get_constraintdef(oid), '\\s+', ' ', 'g')
+        AND regexp_replace(pg_get_constraintdef(oid), '\s+', ' ', 'g')
           = 'CHECK (((replay_requested_at IS NULL) AND (replay_reason IS NULL)) OR ((replay_requested_at IS NOT NULL) AND (replay_reason = ''invocation_progress_deadline_expired''::text) AND (delivered_at IS NOT NULL)))'
       FROM pg_constraint
      WHERE conrelid='public.outbox_messages'::regclass
