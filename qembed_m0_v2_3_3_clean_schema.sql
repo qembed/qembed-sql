@@ -1,6 +1,6 @@
 -- =============================================================================
 -- Qembed Object Runtime — M0 v2.3.3 CLEAN SCHEMA CANDIDATE r4 (fresh install only)
--- PostgreSQL 15+, pgvector >= 0.8. Apply as qembed_migrator (table owner).
+-- PostgreSQL 19, pgvector >= 0.8.7. Apply as qembed_migrator (table owner).
 -- NOT an upgrade script for v2.2 databases (see errata, section "Upgrade").
 -- Status: FINALIZATION CANDIDATE. Architecture frozen; DB release gate = T-01..T-64 on supported matrix.
 -- r3: fixes R3-01..R3-06 (see Addendum §10, acceptance 'R3 regression'); marked 'r3' at each change.
@@ -14,22 +14,28 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- pgvector gate (r1): fail fast below 0.8.0 (hnsw.iterative_scan, addendum §5).
--- Local smoke only: SET qembed.allow_old_pgvector = 'on'. Never in CI/prod.
-DO $$
-DECLARE v TEXT; parts INT[];
+-- pgvector gate: require 0.8.7 or later, comparing all numeric components.
+-- No session-GUC override is permitted.
+CREATE FUNCTION qembed_pgvector_version_supported(p_version TEXT) RETURNS BOOLEAN
+LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog
+AS $qsa011_version_check$
+  SELECT CASE
+    WHEN array_length(string_to_array(p_version, '.'), 1) >= 3
+      THEN string_to_array(p_version, '.')::int[] >= ARRAY[0,8,7]::int[]
+    ELSE false
+  END
+$qsa011_version_check$;
+
+DO $qsa011_version_gate$
+DECLARE v TEXT;
 BEGIN
   SELECT extversion INTO v FROM pg_extension WHERE extname = 'vector';
   IF v IS NULL THEN RAISE EXCEPTION 'pgvector is not installed'; END IF;
-  parts := string_to_array(regexp_replace(v, '[^0-9.]', '', 'g'), '.')::int[];
-  IF (parts[1], coalesce(parts[2],0)) < (0, 8) THEN
-    IF coalesce(current_setting('qembed.allow_old_pgvector', true), 'off') = 'on' THEN
-      RAISE WARNING 'pgvector % < 0.8.0: smoke-test only, NOT a compliant environment', v;
-    ELSE
-      RAISE EXCEPTION 'pgvector % is below the required minimum 0.8.0', v;
-    END IF;
+  IF NOT qembed_pgvector_version_supported(v) THEN
+    RAISE EXCEPTION 'pgvector % is below the required minimum 0.8.7', v;
   END IF;
-END $$;
+END
+$qsa011_version_gate$;
 
 -- -----------------------------------------------------------------------------
 -- 0. Roles (NOLOGIN here; credentials are provisioned out of band)
