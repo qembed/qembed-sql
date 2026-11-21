@@ -1751,7 +1751,11 @@ BEGIN
     EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
   END LOOP;
-END $$;
+END $;
+
+-- Remove any inherited or pre-existing function grants before adding the
+-- worker's narrow allowlist below.
+REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM qembed_worker;
 
 -- -----------------------------------------------------------------------------
 -- 17. Grants (least privilege)
