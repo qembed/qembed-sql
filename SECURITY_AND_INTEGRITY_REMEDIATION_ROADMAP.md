@@ -4,7 +4,7 @@
 **Status:** Active; source-level revalidation recorded against current `master` `407fd2090b63c7492ccebd4cba9e989df166abd3`; live reproduction and measured performance work remain explicitly tracked  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
-**Current revalidation baseline:** `719e73d490e5d2998ade8f5fc8a93f220390a0ef`  
+**Current revalidation baseline:** `407fd2090b63c7492ccebd4cba9e989df166abd3`  
 **Validation target:** PostgreSQL 19 + pgvector 0.8.7  
 **Rule:** No finding is closed by documentation, code inspection alone, or a green legacy smoke suite. Closure requires a regression test that fails before the fix and passes after it, plus recorded validation evidence.
 
@@ -15,7 +15,7 @@
 This roadmap supersedes the ordinary SQL feature backlog while any P0 item is open.
 
 1. **P0 freeze:** do not start unrelated SQL features until all P0 items below are closed or explicitly accepted through a documented threat-model decision by the project owner.
-2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current revalidation base is `719e73d490e5d2998ade8f5fc8a93f220390a0ef`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
+2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the audit baseline `164da3c` is not current `master`; current revalidation base is `407fd2090b63c7492ccebd4cba9e989df166abd3`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
 3. **One security boundary per PR:** prefer small, independently reviewable PRs. Do not combine unrelated role, RLS, trigger, retention, or dependency changes.
 4. **Negative tests are mandatory:** tests must prove that the forbidden operation fails or reveals no data, not merely that the intended operation succeeds.
 5. **Test with the real application role:** tests run as superuser or schema owner do not prove runtime-role isolation. Include role switching and realistic grants.
