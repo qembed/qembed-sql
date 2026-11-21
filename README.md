@@ -1,13 +1,15 @@
 # Qembed M0 v2.3.3 (r4) Finalization Pack
 
+> **P0 security/integrity blocker:** follow [SECURITY_AND_INTEGRITY_REMEDIATION_ROADMAP.md](SECURITY_AND_INTEGRITY_REMEDIATION_ROADMAP.md) before starting unrelated SQL feature work. The roadmap records adversarial findings and verified remediation evidence.
+
 ## Files
-- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r4 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. (r4 adds T-27 Caller-level memory RLS; r4 validation pending).
+- `qembed_m0_v2_3_3_clean_schema.sql` — clean-install schema (PostgreSQL 19 + pgvector 0.8.7 validation target). NOT an upgrade migration. (r4 adds T-27 Caller-level memory RLS).
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r4); §10 — изменения r3, §11 — T-27.
 - `ADR_RT-039_to_RT-047.md` — ADR RT-039…RT-048 (including r3 corrections).
 - `ADR_RT-049_Caller_Memory_RLS.md` — Caller-level episodic memory isolation decision (r4).
 - `ADR_RUST-044_Identical_Content_Version_Deduplication.md` — approved application contract for identical canonical content; no DDL change.
 - `acceptance_T-01_to_T-64.md` — T-01…T-64 + раздел «R3 regression» (R3-01…R3-06) + «Smoke evidence r3».
-- `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40, включая 17_tenant_rls.sql и 24_caller_memory_rls.sql; `05_rust_physical_contract.sql` — контракт физических имён/ключей Rust). Нужны PostgreSQL superuser, pgvector ≥0.8.0, роль `qembed_migrator`; `.github/workflows/sql-smoke.yml` запускает smoke suite на PostgreSQL 16 для PR и push в master.
+- `tests/` — поведенческий smoke-набор (`run_smoke.sh`, SQL 00–40, включая regression tests QSA-001/002/005/007). Нужны PostgreSQL superuser, pgvector 0.8.7, роль `qembed_migrator`; `.github/workflows/sql-smoke.yml` запускает smoke suite на PostgreSQL 19 / pgvector 0.8.7 для PR и push в master.
 - `Qembed_Object_Runtime_M0_v2_3_3_FINAL_TZ.pdf`, `Qembed_M0_v2_3_3_Diagrams.pdf` — **не пересобирались, содержимое r1**. Нормативны `.md` (addendum r3 имеет приоритет по §1); PDF с addendum r1 устарел в части §9–§10.
 
 ## Что исправлено в r3 (SQL)
@@ -20,8 +22,8 @@
 
 ## Validation status
 - r3 baseline: PostgreSQL 16 + pgvector 0.8.0, smoke-набор 103/103 (r1 на том же наборе: 12 падений).
-- r4: caller-level RLS и regression tests добавлены; PostgreSQL execution ещё не выполнен. r3 evidence не подтверждает r4.
-- NOT executed: PostgreSQL 15, большинство T-01…T-64, конкурентность/fencing, Rust JCS, SSRF, failure-injection, upgrade. Заявления о production-готовности нет.
+- r4 current master: PostgreSQL 19 + pgvector 0.8.7 smoke suite passed 404/404 after QSA-005 remediation. Это результат smoke suite, а не подтверждение прохождения всех T-01…T-64 acceptance-пунктов.
+- Not yet validated: полный T-01…T-64 acceptance, multi-session concurrency/fencing, Rust JCS, SSRF, failure-injection и upgrade. PostgreSQL 15/16 не являются текущей целевой CI-конфигурацией. Заявления о production-готовности нет.
 - **B-01…B-09:** список замечаний и отчёт r2 в присланный архив не входили; r3 не утверждает закрытие B-01…B-09 и не сопоставляет с ними R3-01…R3-06. Пришлите список — сверю.
 
 ## Open items (r4 candidate)
@@ -31,7 +33,7 @@
 - Concurrent multi-session tests for Invocation fencing remain outstanding.
 
 ## Start coding
-Архитектура заморожена для M1a (addendum §7–§8, RT-047). SQL — candidate до прохождения T-01…T-64 на PG 15/16 × pgvector ≥0.8.0. Внешние write-tools не включать до T-07, T-22, T-38, T-46, T-47, T-52, T-59, T-64.
+Архитектура заморожена для M1a (addendum §7–§8, RT-047). SQL остаётся candidate до прохождения обязательных T-01…T-64 на PostgreSQL 19 + pgvector 0.8.7. Внешние write-tools не включать до T-07, T-22, T-38, T-46, T-47, T-52, T-59, T-64.
 Порядок публикации версии в репозитории: supersede старой → publish новой → перенос `published_version_id` в одной транзакции.
 
 ## Rust-compat remediation (backlog `sql_remediation_backlog_rust_compatibility.md`)
@@ -48,7 +50,7 @@ Rust-репозиторий — неизменяемый источник кон
 | AUDIT-007 ObjectVersion / object lifecycle | **применён** (строгие переходы статусов и неизменяемая identity) |
 | AUDIT-008 composite tenant FKs | **применён** (каталожная проверка и cross-tenant negative tests) |
 | AUDIT-009 Invocation lifecycle/fencing | **применён** (state machine, optimistic version и lease reclaim guard) |
-| AUDIT-010 SECURITY DEFINER hardening | **применён** (safe search_path, grants и injection regression tests) |
+| AUDIT-010 SECURITY DEFINER hardening | initial hardening implemented; QSA-002 verified in PR #28; QSA-001 role split verified in PR #29; QSA-005 and QSA-007 verified in PR #31/#30; remaining findings tracked as P0 |
 
 ### AUDIT-001: единый путь установки (миграционная линия)
 - Единственный источник DDL — `qembed_m0_v2_3_3_clean_schema.sql` (fresh install, один раз, под `qembed_migrator`).
@@ -62,7 +64,7 @@ Rust-репозиторий — неизменяемый источник кон
 - Поля r3 в `object_versions` (`config`, `chat_model_ref`, `embedding_model_id`, `published_at`) — nullable-расширения.
 - `retention_purge` принимает `'outbox_messages'` вместо `'outbox'`.
 
-Основные Rust-compatibility аудиты AUDIT-001…010 завершены. Дальнейшие работы перечислены в разделе **Future work** ниже; они не меняют Rust-контракты без отдельного архитектурного решения.
+Первичная Rust-compatibility линия AUDIT-001…010 завершена. Отдельный adversarial security/integrity аудит назначен P0; его актуальный статус и порядок исправлений — в [Roadmap](SECURITY_AND_INTEGRITY_REMEDIATION_ROADMAP.md). Дальнейшие изменения не меняют Rust-контракты без отдельного архитектурного решения.
 
 
 ### AUDIT-002: owner authentication
@@ -138,7 +140,9 @@ Rust-репозиторий — неизменяемый источник кон
 - Regression coverage: `tests/24_caller_memory_rls.sql`, included in `tests/run_smoke.sh`.
 
 ### AUDIT-010: SECURITY DEFINER hardening
-- Revoke `CREATE` on schema `public` from `PUBLIC` and all application roles. Pin every SECURITY DEFINER function search path to `pg_catalog, public, pg_temp`, placing the temporary schema last so caller-created temporary relations cannot shadow trusted objects.
+- Revoke `CREATE` on schema `public` from `PUBLIC` and application roles. QSA-002 pins the event allocator, embedding dimension guard, and published-pointer guard to `pg_catalog, public, pg_temp`; all 11 SECURITY DEFINER functions are catalog-checked for this path. See verified PR #28.
+- QSA-001 moves cross-tenant lease/reconciliation discovery and global reservation expiry to the isolated `qembed_worker` role; `qembed_runtime` no longer has EXECUTE on those entry points. See verified PR #29.
+- QSA-005 makes Caller revocation final (PR #31); QSA-007 preserves pending outbox replay during retention (PR #30).
 - Add regression checks for the definer role attributes and membership isolation; function ownership, SECURITY DEFINER flag, fixed `pg_catalog, public, pg_temp` search_path and PUBLIC execute revocation; and the intended runtime/retention/admin/dispatcher EXECUTE matrix.
 - Assert the narrow table privileges held by `qembed_definer`.
 - Exercise the retention whitelist with a hostile table argument and a SQL-looking reason string, proving that the former is rejected and the latter is stored as literal data.
