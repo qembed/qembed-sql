@@ -127,6 +127,22 @@ SELECT tt.try('SQL-011 revoked Caller cannot receive a new delegation','err',
  $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000002')$q$);
 SELECT tt.try('SQL-011 resolver rejects a revoked Caller','err',
  $q$SELECT * FROM resolve_delegated_caller('d1120000-0000-0000-0000-000000000002')$q$);
+SELECT tt.try('QSA-005 runtime cannot reactivate a revoked Caller','err',
+ $q$UPDATE callers SET revoked_at=NULL
+      WHERE tenant_id='d1100000-0000-0000-0000-000000000001'
+        AND id='d1120000-0000-0000-0000-000000000002'$q$);
+SELECT tt.try('QSA-005 runtime cannot rewrite Caller revocation timestamp','err',
+ $q$UPDATE callers SET revoked_at=clock_timestamp()
+      WHERE tenant_id='d1100000-0000-0000-0000-000000000001'
+        AND id='d1120000-0000-0000-0000-000000000002'$q$);
+SELECT tt.try('QSA-005 Caller token identity cannot be rewritten','err',
+ $q$UPDATE callers SET token_hash=digest('replacement','sha256')
+      WHERE tenant_id='d1100000-0000-0000-0000-000000000001'
+        AND id='d1120000-0000-0000-0000-000000000002'$q$);
+SELECT tt.chk('QSA-005 revoked Caller remains revoked after rejected rewrites',
+ $q$SELECT revoked_at IS NOT NULL FROM callers
+      WHERE tenant_id='d1100000-0000-0000-0000-000000000001'
+        AND id='d1120000-0000-0000-0000-000000000002'$q$);
 RESET ROLE;
 
 -- Disabled principals cannot create new delegations.
