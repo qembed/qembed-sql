@@ -1,7 +1,13 @@
 \set A '''aaaaaaaa-0000-0000-0000-000000000001'''
 SET client_min_messages=warning;
--- platform kill switch (superuser)
-INSERT INTO kill_switches(id,scope_type,enabled,changed_by) VALUES ('f0000000-0000-0000-0000-000000000001','platform',false,'ops');
+-- Platform-wide switch (superuser) and a tenant-scoped switch created by platform ops.
+INSERT INTO kill_switches(id,scope_type,enabled,changed_by)
+VALUES ('f0000000-0000-0000-0000-000000000001','platform',false,'ops');
+SET ROLE qembed_admin;
+INSERT INTO kill_switches(id,scope_type,tenant_id,enabled,changed_by)
+VALUES ('f0000000-0000-0000-0000-000000000002','tenant',
+        'aaaaaaaa-0000-0000-0000-000000000001',true,'platform-ops');
+RESET ROLE;
 SET ROLE qembed_runtime;
 SELECT set_config('app.tenant_id', :A, false) \gset
 SELECT tt.chk('T-36 runtime reads platform ks', $q$SELECT count(*)=1 FROM kill_switches WHERE scope_type='platform'$q$);
@@ -10,6 +16,29 @@ SELECT tt.try('T-50 runtime UPDATE platform ks (0 rows)','ok',$q$UPDATE kill_swi
 SELECT tt.chk('T-50 platform ks unchanged', $q$SELECT enabled=false FROM kill_switches WHERE scope_type='platform'$q$);
 SELECT tt.try('T-50 runtime DELETE platform ks','ok',$q$DELETE FROM kill_switches WHERE scope_type='platform'$q$);
 SELECT tt.chk('T-50 platform ks still there', $q$SELECT count(*)=1 FROM kill_switches WHERE scope_type='platform'$q$);
+SELECT tt.try('QSA-006 runtime cannot disable a platform-owned tenant switch','err',
+ $q$UPDATE kill_switches SET enabled=false
+      WHERE id='f0000000-0000-0000-0000-000000000002'$q$);
+SELECT tt.try('QSA-006 runtime cannot delete a platform-owned tenant switch','err',
+ $q$DELETE FROM kill_switches
+      WHERE id='f0000000-0000-0000-0000-000000000002'$q$);
+SELECT tt.chk('QSA-006 platform-owned tenant switch remains enabled',
+ $q$SELECT enabled AND managed_by_role='qembed_admin'::name
+      FROM kill_switches WHERE id='f0000000-0000-0000-0000-000000000002'$q$);
+SELECT tt.try('QSA-006 runtime-created switch ignores forged platform ownership','ok',
+ $q$INSERT INTO kill_switches(id,scope_type,tenant_id,object_id,enabled,changed_by,managed_by_role)
+      VALUES ('f0000000-0000-0000-0000-000000000003','object',
+              'aaaaaaaa-0000-0000-0000-000000000001',
+              '0b000000-0000-0000-0000-000000000001',true,'tenant-app','qembed_admin')$q$);
+SELECT tt.chk('QSA-006 runtime cannot forge managed_by_role on insert',
+ $q$SELECT managed_by_role='qembed_runtime'::name
+      FROM kill_switches WHERE id='f0000000-0000-0000-0000-000000000003'$q$);
+SELECT tt.try('QSA-006 runtime may update its own switch','ok',
+ $q$UPDATE kill_switches SET enabled=false
+      WHERE id='f0000000-0000-0000-0000-000000000003'$q$);
+SELECT tt.try('QSA-006 runtime may delete its own switch','ok',
+ $q$DELETE FROM kill_switches
+      WHERE id='f0000000-0000-0000-0000-000000000003'$q$);
 -- Tenant-scoped definer functions remain callable by runtime.
 SELECT tt.chk('authenticate_principal', $q$SELECT count(*)=1 FROM authenticate_principal('\x01')$q$);
 SELECT tt.try('resolve_object_tenant','ok',$q$SELECT resolve_object_tenant('0b000000-0000-0000-0000-000000000001')$q$);
