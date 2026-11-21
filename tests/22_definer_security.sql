@@ -260,3 +260,36 @@ SELECT tt.chk('AUDIT-010 definer table grants remain least-privilege',
        AND has_column_privilege('qembed_definer','public.knowledge_chunks','valid_from_revision','UPDATE')
        AND has_column_privilege('qembed_definer','public.knowledge_chunks','valid_to_revision','UPDATE')
        AND NOT has_column_privilege('qembed_definer','public.knowledge_chunks','content','UPDATE')$q$);
+
+-- QSA-015: the receipt policy's raw tenant-GUC cast cannot expose rows to the
+-- runtime role because that role has no table privileges. The dispatcher is
+-- intentionally INSERT-only; an empty/malformed context therefore cannot
+-- turn into a read path.
+SELECT tt.chk('QSA-015 runtime cannot read or mutate publication receipts',
+  $q$SELECT NOT has_table_privilege('qembed_runtime','public.outbox_publication_receipts','SELECT')
+        AND NOT has_table_privilege('qembed_runtime','public.outbox_publication_receipts','INSERT')
+        AND NOT has_table_privilege('qembed_runtime','public.outbox_publication_receipts','UPDATE')
+        AND NOT has_table_privilege('qembed_runtime','public.outbox_publication_receipts','DELETE')
+        AND NOT has_table_privilege('qembed_runtime','public.outbox_publication_receipts','TRUNCATE')$q$);
+SELECT tt.chk('QSA-015 dispatcher publication receipts remain INSERT-only',
+  $q$SELECT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','INSERT')
+        AND NOT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','SELECT')
+        AND NOT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','UPDATE')
+        AND NOT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','DELETE')
+        AND NOT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','TRUNCATE')$q$);
+
+-- QSA-018: row-level append-only triggers do not fire for TRUNCATE. Prove that
+-- all non-owner application/worker roles are denied the statement privilege.
+SELECT tt.chk('QSA-018 no application or worker role can TRUNCATE append-only logs',
+  $q$SELECT NOT has_table_privilege('qembed_runtime','public.events','TRUNCATE')
+        AND NOT has_table_privilege('qembed_runtime','public.outbox_publication_receipts','TRUNCATE')
+        AND NOT has_table_privilege('qembed_dispatcher','public.events','TRUNCATE')
+        AND NOT has_table_privilege('qembed_dispatcher','public.outbox_publication_receipts','TRUNCATE')
+        AND NOT has_table_privilege('qembed_admin','public.events','TRUNCATE')
+        AND NOT has_table_privilege('qembed_admin','public.outbox_publication_receipts','TRUNCATE')
+        AND NOT has_table_privilege('qembed_retention','public.events','TRUNCATE')
+        AND NOT has_table_privilege('qembed_retention','public.outbox_publication_receipts','TRUNCATE')
+        AND NOT has_table_privilege('qembed_worker','public.events','TRUNCATE')
+        AND NOT has_table_privilege('qembed_worker','public.outbox_publication_receipts','TRUNCATE')
+        AND NOT has_table_privilege('qembed_definer','public.events','TRUNCATE')
+        AND NOT has_table_privilege('qembed_definer','public.outbox_publication_receipts','TRUNCATE')$q$);
