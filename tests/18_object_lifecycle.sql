@@ -69,7 +69,8 @@ UPDATE objects SET state='active', published_version_id='18000000-0000-0000-0000
 
 SELECT tt.try('R3-01 cannot supersede the pointed-to version without moving the pointer','err',
  $q$UPDATE object_versions SET status='superseded'
-      WHERE object_version_id='18000000-0000-0000-0000-000000000011'$q$);
+      WHERE object_version_id='18000000-0000-0000-0000-000000000011';
+    SET CONSTRAINTS trg_ov_superseded_pointer_check IMMEDIATE$q$);
 SELECT tt.try('R3-01 replacement publication and pointer move commit atomically','ok',
  $q$UPDATE object_versions SET status='superseded'
       WHERE object_version_id='18000000-0000-0000-0000-000000000011';
