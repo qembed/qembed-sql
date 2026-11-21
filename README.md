@@ -1,5 +1,7 @@
 # Qembed M0 v2.3.3 (r4) Finalization Pack
 
+> **P0 security/integrity blocker:** see [SECURITY_AND_INTEGRITY_REMEDIATION_ROADMAP.md](SECURITY_AND_INTEGRITY_REMEDIATION_ROADMAP.md). New SQL feature work is paused until its P0 findings are revalidated and resolved or explicitly accepted.
+
 ## Files
 - `qembed_m0_v2_3_3_clean_schema.sql` — clean-install candidate r4 (PG 15+, pgvector ≥0.8.0 gate). NOT an upgrade migration. (r4 adds T-27 Caller-level memory RLS; r4 validation pending).
 - `Qembed_M0_v2_3_3_Finalization_Addendum.md` — нормативный addendum (r4); §10 — изменения r3, §11 — T-27.
