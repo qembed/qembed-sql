@@ -670,7 +670,7 @@ CREATE TABLE knowledge_chunk_embeddings (
     REFERENCES knowledge_chunks(tenant_id, object_id, id) ON DELETE CASCADE
 );
 
-CREATE FUNCTION check_embedding_dim() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION check_embedding_dim() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $
 DECLARE d INTEGER;
 BEGIN
   SELECT dimension INTO d FROM embedding_models WHERE id = NEW.model_id;
@@ -898,7 +898,7 @@ CREATE TABLE events (
 -- same stream serialize on its counter row; independent streams do not share a
 -- lock or counter. The caller cannot choose or reuse a version.
 CREATE FUNCTION assign_event_stream_version() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $event_stream_version$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $event_stream_version$
 BEGIN
   IF NEW.stream_version IS NOT NULL THEN
     RAISE EXCEPTION 'event stream_version is database-assigned'
@@ -2013,7 +2013,7 @@ END $$;
 -- RT-046: object pointer may reference only a published version belonging to
 -- the same tenant/object. DEFERRABLE FK remains for transactional publication.
 CREATE FUNCTION object_published_pointer_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $
 DECLARE st TEXT;
 BEGIN
   IF NEW.published_version_id IS NULL THEN
