@@ -213,6 +213,17 @@ def main():
         )
         if verify(cursor, token.replace("qctx1:", "qctx2:", 1)) is not None:
             raise AssertionError("unknown envelope version was accepted")
+        for malformed in (
+            "qctx1:not-hex:" + ("00" * 64),
+            "qctx1:" + payload.hex()[:-1] + ":" + signature.hex(),
+            "qctx1:" + payload.hex() + ":00",
+            "QCTX1:" + payload.hex() + ":" + signature.hex(),
+        ):
+            if verify(cursor, malformed) is not None:
+                raise AssertionError("malformed token envelope was accepted")
+        assert_invalid(cursor, sign, "malformed signed JSON", payload_override=b"not-json", signature_override=sign(b"not-json"))
+        assert_invalid(cursor, sign, "unknown claim", {"unexpected_claim": "not-allowed"})
+        assert_invalid(cursor, sign, "unknown key", {"key_id": "not-registered"})
         assert_invalid(cursor, sign, "wrong backend", {"backend_pid": str(int(claims["backend_pid"]) + 1)})
         assert_invalid(cursor, sign, "wrong transaction", {"transaction_id": str(int(claims["transaction_id"]) + 1)})
         assert_invalid(cursor, sign, "wrong database", {"database_oid": str(int(database_oid) + 1)})
