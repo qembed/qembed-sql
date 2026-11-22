@@ -1,6 +1,6 @@
 # RT-050 — Cryptographically verified transaction context
 
-**Status:** Proposed architecture plan; intentionally not implemented  
+**Status:** Proposed architecture plan; PostgreSQL 19 verifier/binding feasibility prototyped, production design intentionally not implemented  
 **Priority:** Deferred — revisit after completion of the SQL adversarial audit  
 **Scope:** QSA-003 trust boundary; PostgreSQL identity context, Rust transaction setup, RLS policies, deployment and test contracts  
 **Branch:** `architecture/rt-050-signed-transaction-context`  
@@ -38,7 +38,7 @@ The token is carried in a single setting such as `app.context_token`. The settin
 - The Context Issuer is outside the arbitrary-SQL execution path and does not expose a signing operation that arbitrary SQL can invoke with attacker-chosen claims.
 - The issuer holds the signing private key. PostgreSQL should ideally hold only a public verification key.
 - An asymmetric signature scheme is preferred because compromise of the database runtime role does not reveal a signing secret.
-- The PostgreSQL verification mechanism is an explicit prototype gate. Do not assume that core PostgreSQL or `pgcrypto` provides the required Ed25519 / generic signature verification. Evaluate a vetted, maintained extension or another narrowly scoped verification mechanism on the actual PostgreSQL 19 target.
+- The PostgreSQL verification mechanism was an explicit prototype gate. The pgsodium 3.1.11 Ed25519 API has now passed a PostgreSQL 19 / pgvector 0.8.7 feasibility workflow. This is not vendor certification or production supply-chain approval; see the prototype evidence in section 10.
 - HMAC is a fallback only if the shared-secret placement, database exposure, rotation and compromise assumptions are explicitly accepted. It is not equivalent to public-key verification.
 - No SQL function may mint or sign a token. Database functions only verify and expose claims.
 - Key rotation, key identifiers, expiry, clock-skew policy and emergency key revocation must be specified before implementation.
@@ -47,7 +47,7 @@ The token is carried in a single setting such as `app.context_token`. The settin
 
 A token must be bound to both the database backend and the exact transaction. A token copied to another backend or transaction must fail verification.
 
-The prototype must establish the precise ordering needed to obtain the backend PID and transaction ID before token issuance and before any RLS-protected query. It must also verify behavior for read-only transactions and transaction-ID assignment semantics.
+The feasibility probe established that a token bound to `pg_backend_pid()` and `pg_current_xact_id()` is accepted only in its issuing backend and transaction. It also passed commit/rollback replay, savepoint rollback, independent-backend replay, and read-only transaction-ID acquisition. The Rust-side ordering, retry orchestration and actual pool lifecycle still need to be designed and tested before production implementation.
 
 A nonce alone does not prevent replay. If single-use semantics are required beyond backend/transaction binding, implement and test an atomic one-time-use mechanism; do not claim replay prevention merely because a nonce exists.
 
@@ -108,12 +108,28 @@ Per-tenant PostgreSQL login roles and separate connection pools remain a possibl
 ## 9. Decision gates before implementation
 
 - [ ] Map all current reads and writes of the three identity GUCs and every policy/function that consumes them.
-- [ ] Prototype public-key signature verification on PostgreSQL 19 using a vetted mechanism; document operational and supply-chain implications.
-- [ ] Prove transaction binding to backend PID and transaction ID, including retries and pool reuse.
-- [ ] Decide whether atomic one-time-use is required in addition to transaction binding.
+- [x] Prototype pgsodium Ed25519 verification on PostgreSQL 19 and least-privilege verifier execution. The feasibility result is recorded in section 10; production supply-chain and vendor-support approval remain pending.
+- [x] Demonstrate the narrow backend/transaction/database/deployment binding predicate, including replay after commit/rollback, independent-backend replay, savepoint semantics, and read-only transaction-ID acquisition.
+- [ ] Complete retry orchestration, error handling and connection-pool lifecycle tests in the Rust transaction layer.
+- [ ] Decide whether atomic one-time-use is required in addition to backend/transaction binding.
 - [ ] Specify issuer authentication, Caller delegation validation, revocation behavior, key rotation and outage behavior.
 - [ ] Produce a Rust transaction API design and migration/compatibility plan.
 - [ ] Add adversarial SQL tests before any production migration.
 - [ ] Obtain explicit project-owner approval of the complete design.
 
-**Implementation status:** none. This branch is a parked design plan; it does not alter `master`, deployed SQL, or the current Rust transaction contract.
+## 10. PostgreSQL 19 feasibility prototype evidence
+
+The following is experimental evidence only. It does not implement the proposed production schema or Rust contract.
+
+- [SQL PR #68](https://github.com/qembed/qembed-sql/pull/68) builds pgsodium 3.1.11 from exact source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784` against PostgreSQL 19 and verifies the Ed25519 detached-signature API. The source commit signature is valid; the annotated `v3.1.11` tag object is unsigned.
+- pgsodium 3.1.11's IPcrypt implementation requires libsodium 1.0.22 symbols; Debian Bookworm's libsodium 1.0.18 is insufficient. The workflow builds libsodium 1.0.22 from pinned source and asserts that pgsodium resolves `libsodium.so.26`.
+- The test-only verifier is `SECURITY DEFINER`, uses a fixed `search_path` with `pg_temp` last, reads public keys from a table inaccessible to `qembed_runtime`, and grants the runtime role verification but no signing or key-generation capability.
+- [Prototype workflow run #31](https://github.com/qembed/qembed-sql/actions/runs/45020806755) and [PostgreSQL 19 / pgvector smoke run #246](https://github.com/qembed/qembed-sql/actions/runs/45020806694) passed on the tested code head `bcf65cf6141af8812849705d741f328d5e5141dc`.
+
+The test-only verifier rejects modified signatures, expired tokens, wrong backend PID, wrong database OID, wrong deployment/audience, replay after COMMIT, replay after ROLLBACK on the same backend, and replay from an independent connection. It confirms that forged legacy identity GUCs do not alter the signed claims, that savepoint rollback preserves the valid outer-transaction context, and that `pg_current_xact_id()` can be obtained in a `READ ONLY` transaction.
+
+**Not yet proven:** a real Context Issuer and private-key isolation; production deployment-ID provisioning and cross-cluster uniqueness; token encoding/canonicalization shared by Rust and SQL; Caller delegation and revocation races; key rotation/revocation; issuer outage; RLS policy integration and per-row verification cost; retry/error handling; and actual connection-pool reset/reuse in Rust. The test issues tokens in a privileged SQL test session, uses a test-only verifier and fixtures, and does not replace production identity GUCs.
+
+A nonce is present in the probe payload but is not treated as single-use replay protection. Transaction binding is the tested replay boundary; any stronger one-time-use requirement remains a separate decision.
+
+**Implementation status:** none. This branch remains a proposed design plan; it does not alter `master`, deployed SQL, or the current Rust transaction contract.
