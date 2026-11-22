@@ -38,9 +38,9 @@ The test issuer now emits the same wire envelope as Rust:
 The SQL verifier:
 - rejects unknown envelope versions, malformed/lowercase-hex violations, invalid signature lengths and payloads above 8 KiB;
 - uses the untrusted `key_id` only to locate a candidate public key, verifies the signature over the original payload bytes, and trusts no claim until verification succeeds;
-- enforces verification-key lifecycle states: `active` accepts tokens issued after activation; `retired` rejects newly issued tokens but accepts pre-retirement tokens only until a bounded verification deadline; `revoked` rejects all tokens immediately;
-- exposes privileged `retire_verification_key` and `revoke_verification_key` operations, while the runtime role cannot read or mutate the key registry or execute lifecycle functions;
-- enforces monotonic transitions (`active -> retired -> revoked`, or `active -> revoked`), immutable key identity/public material, retained audit rows, and a minimum 120-second retirement grace (maximum one hour);
+- enforces verification-key lifecycle states: `staged` is not verifiable; `active` accepts tokens issued after activation; `retired` rejects newly issued tokens but accepts pre-retirement tokens only until a bounded verification deadline; `revoked` rejects all tokens immediately;
+- exposes narrowly privileged `stage_verification_key`, `activate_verification_key`, `retire_verification_key`, and `revoke_verification_key` operations; the dedicated `qembed_key_control_plane` login has EXECUTE-only access and cannot read or mutate registry/audit tables directly; runtime has no registry, audit, low-level verifier, or management-function privileges;
+- enforces monotonic transitions (`staged -> active -> retired -> revoked`, with `staged -> revoked` and `active -> revoked` emergency paths), immutable key identity/public material, append-only audit rows, idempotency by request ID, distinct operator/approver subjects for activation and retirement, and a 120-second to one-hour retirement grace;
 - validates the exact 14 version-1 string claims, lowercase UUID syntax (including nonce), issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry times and the 60-second maximum lifetime;
 - exposes typed tenant, Principal and Caller accessors;
 - reads authorization context only from `app.context_token`.
@@ -49,13 +49,13 @@ The integration test also attempts to install the maximum-size token envelope to
 
 The verified-context function uses statement-stable time and is declared STABLE so the uncorrelated scalar subquery in the RLS policy can be planned as an InitPlan. The integration test asserts that plan shape directly, then rejects modified payload/signature, unknown envelope version, wrong backend/transaction/database/deployment/issuer/version, expired tokens, replay after COMMIT/ROLLBACK and replay from another backend. It verifies savepoint rollback, read-only transactions, typed claim accessors, least privilege, and RLS isolation despite forged legacy identity GUCs.
 
-This is still an external test issuer, not an invocation of the Rust `ContextIssuer` itself. The use of RFC 8785 in Python tests exercises the same canonicalization standard but does not replace a Rust-to-PostgreSQL integration test using `serde_jcs`.
+This is still an external test issuer, not an invocation of the Rust `ContextIssuer` itself. The use of RFC 8785 in Python tests exercises the same canonicalization standard but does not replace a Rust-to-PostgreSQL integration test using `serde_jcs`. The SQL role/function fixture is not a production control plane or a canonical production migration.
 
 ## Limitations and remaining gates
 
 - This is new Qembed-maintained native C code and needs independent security review, fuzzing, ABI/build provenance, a supported PostgreSQL matrix, and packaging/update policy.
 - The Python issuer is a test harness; key storage/KMS/HSM integration and the Rust connection-pool lifecycle are not tested end-to-end here.
-- The lifecycle fixture exercises database-side key retirement/revocation semantics; it does not yet implement KMS/HSM custody, coordinated multi-instance signer rollout, or a production key-management control plane.
+- The lifecycle fixture now exercises staged registration, explicit activation, database-side retirement/revocation, a dedicated control-plane database identity, least-privilege management functions and append-only audit. It does not implement the external KMCP service, OIDC/SSO authorization, KMS/HSM custody, proof-of-possession at the service boundary, coordinated multi-instance signer rollout, or production deployment provisioning.
 - No real second-cluster replay test, issuer outage, or retry orchestration test is included.
 - The RLS policies are test fixtures, not production policies. Production RLS migration and representative workload benchmarking remain required.
 - The prototype is in `qembed-sql` only for evaluation; if adopted, extension source/package ownership and release lifecycle must be decided explicitly.
