@@ -1,6 +1,6 @@
 # QSA-003 — minimal Ed25519 verifier prototype
 
-**Status:** Alternative feasibility prototype only. No production DDL, no production RLS migration, and no decision to replace pgsodium.
+**Status:** Selected feasibility candidate for QSA-003/RT-050; not production-approved. No canonical production RLS migration has been merged.
 
 ## Design
 
@@ -51,7 +51,7 @@ The integration test also attempts to install the maximum-size token envelope to
 
 The verified-context function uses statement-stable time and is declared STABLE so the uncorrelated scalar subquery in the RLS policy can be planned as an InitPlan. The integration test asserts that plan shape directly, then rejects modified payload/signature, unknown envelope version, wrong backend/transaction/database/deployment/issuer/version, expired tokens, replay after COMMIT/ROLLBACK and replay from another backend. It verifies savepoint rollback, read-only transactions, typed claim accessors, least privilege, and RLS isolation despite forged legacy identity GUCs.
 
-This is still an external test issuer, not an invocation of the Rust `ContextIssuer` itself. The use of RFC 8785 in Python tests exercises the same canonicalization standard but does not replace a Rust-to-PostgreSQL integration test using `serde_jcs`. The SQL role/function fixture is not a production control plane or a canonical production migration.
+The Python issuer is a verifier-fixture harness, not a replacement for the Rust issuer. Rust PR #93 is now merged and its PostgreSQL integration suite exercises the real Rust `ContextIssuer` against this prototype contract. That integration evidence does not make this prototype the canonical production schema: the production clean-install DDL and all production SQL RLS/function consumers still need migration and re-validation.
 
 ## Principal-only and Caller-scoped contexts
 
@@ -66,7 +66,7 @@ Version 1 keeps a fixed 14-claim object. `caller_id` is always present: a UUID s
 - The RLS policies are test fixtures, not production policies. Production RLS migration and representative workload benchmarking remain required.
 - The prototype is in `qembed-sql` only for evaluation; if adopted, extension source/package ownership and release lifecycle must be decided explicitly.
 
-Compare this branch with [the pgsodium prototype PR #68](https://github.com/qembed/qembed-sql/pull/68). Neither prototype is production-approved.
+The pgsodium alternative in PR #68 was not selected and is now closed as superseded. This narrow C verifier is the selected implementation candidate, but remains a feasibility prototype and is not production-approved.
 
 ## Validation evidence
 
