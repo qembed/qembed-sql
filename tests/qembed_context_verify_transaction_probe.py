@@ -146,11 +146,16 @@ def main():
     admin = connect()
     admin.autocommit = True
     with admin.cursor() as cursor:
+        runtime_role_attributes = (
+            (False, False, False, False, False, True, False)
+            if os.environ.get("QSA003_FULL_SCHEMA") == "1"
+            else (False, False, False, False, False, False, False)
+        )
         for role_name, expected in (
             ("qembed_key_control_plane", (False, False, False, False, False, False, True)),
             ("qembed_key_registry_owner", (False, False, False, False, False, False, False)),
             ("qembed_key_audit_exporter", (False, False, False, False, False, False, True)),
-            ("qembed_runtime", (False, False, False, False, False, False, False)),
+            ("qembed_runtime", runtime_role_attributes),
         ):
             cursor.execute(
                 "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, "
