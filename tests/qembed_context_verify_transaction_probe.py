@@ -211,8 +211,10 @@ def main():
         # A token from a rolled-back transaction must fail in the following transaction.
         cursor.execute("BEGIN")
         rollback_payload, rollback_signature, rollback_claims = issue_token(cursor, sign)
+        cursor.execute("SET ROLE qembed_runtime")
         if verify(cursor, rollback_payload, rollback_signature) != rollback_claims:
             raise AssertionError("valid token in rollback test transaction was rejected")
+        cursor.execute("RESET ROLE")
         connection.rollback()
         cursor.execute("BEGIN")
         cursor.execute("SET ROLE qembed_runtime")
