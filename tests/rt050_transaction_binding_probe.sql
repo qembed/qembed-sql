@@ -82,6 +82,52 @@ GRANT USAGE ON SCHEMA qsa003_probe TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qsa003_probe.verified_context(bytea, bytea) TO qembed_runtime;
 GRANT SELECT ON qsa003_probe.probe_tokens TO qembed_runtime;
 
+-- Compare a direct RLS verifier call with an uncorrelated scalar subquery.
+-- The latter should become an InitPlan and verify the token once per statement.
+CREATE FUNCTION qsa003_probe.context_tenant_id()
+RETURNS uuid
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pgsodium, qsa003_probe, pg_temp
+AS $fn$
+  SELECT (
+    qsa003_probe.verified_context(
+      decode(current_setting('qsa003.context_payload', true), 'hex'),
+      decode(current_setting('qsa003.context_signature', true), 'hex')
+    )->>'tenant_id'
+  )::uuid
+$fn$;
+REVOKE ALL ON FUNCTION qsa003_probe.context_tenant_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION qsa003_probe.context_tenant_id() TO qembed_runtime;
+
+CREATE TABLE qsa003_probe.tenant_rows_direct (
+  tenant_id uuid NOT NULL,
+  row_id bigint NOT NULL
+);
+CREATE TABLE qsa003_probe.tenant_rows_initplan (
+  tenant_id uuid NOT NULL,
+  row_id bigint NOT NULL
+);
+INSERT INTO qsa003_probe.tenant_rows_direct
+SELECT CASE WHEN n <= 5000
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10000) AS g(n);
+INSERT INTO qsa003_probe.tenant_rows_initplan
+SELECT * FROM qsa003_probe.tenant_rows_direct;
+
+ALTER TABLE qsa003_probe.tenant_rows_direct ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qsa003_probe.tenant_rows_direct FORCE ROW LEVEL SECURITY;
+ALTER TABLE qsa003_probe.tenant_rows_initplan ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qsa003_probe.tenant_rows_initplan FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_rows_direct_policy ON qsa003_probe.tenant_rows_direct
+  USING (tenant_id = qsa003_probe.context_tenant_id());
+CREATE POLICY tenant_rows_initplan_policy ON qsa003_probe.tenant_rows_initplan
+  USING (tenant_id = (SELECT qsa003_probe.context_tenant_id()));
+GRANT SELECT ON qsa003_probe.tenant_rows_direct,
+                qsa003_probe.tenant_rows_initplan TO qembed_runtime;
+
 BEGIN;
 DO $$
 DECLARE
@@ -146,6 +192,8 @@ DECLARE
 BEGIN
   SELECT * INTO STRICT v_token FROM qsa003_probe.probe_tokens WHERE test_case = 'valid';
   SELECT claims INTO STRICT v_expected FROM pg_temp.qsa003_expected;
+  PERFORM set_config('qsa003.context_payload', encode(v_token.payload, 'hex'), true);
+  PERFORM set_config('qsa003.context_signature', encode(v_token.signature, 'hex'), true);
   PERFORM set_config('app.tenant_id', 'ffffffff-ffff-ffff-ffff-ffffffffffff', true);
   PERFORM set_config('app.principal_id', 'ffffffff-ffff-ffff-ffff-ffffffffffff', true);
   PERFORM set_config('app.caller_id', 'ffffffff-ffff-ffff-ffff-ffffffffffff', true);
@@ -173,6 +221,35 @@ BEGIN
   END IF;
 END
 $$;
+-- The RLS predicates both return only the signed tenant's 5,000 rows.
+-- The InitPlan policy must contain an InitPlan so signature verification is
+-- not repeated for every row. EXPLAIN ANALYZE records the cost of both forms.
+DO $rls$
+DECLARE
+  v_count bigint;
+  v_plan json;
+BEGIN
+  SELECT count(*) INTO v_count FROM qsa003_probe.tenant_rows_direct;
+  IF v_count <> 5000 THEN
+    RAISE EXCEPTION 'direct RLS policy returned %, expected 5000', v_count;
+  END IF;
+  SELECT count(*) INTO v_count FROM qsa003_probe.tenant_rows_initplan;
+  IF v_count <> 5000 THEN
+    RAISE EXCEPTION 'InitPlan RLS policy returned %, expected 5000', v_count;
+  END IF;
+
+  EXECUTE 'EXPLAIN (FORMAT JSON) SELECT count(*) FROM qsa003_probe.tenant_rows_initplan'
+    INTO v_plan;
+  IF v_plan::text NOT LIKE '%InitPlan%' THEN
+    RAISE EXCEPTION 'uncorrelated RLS context subquery did not become an InitPlan: %', v_plan;
+  END IF;
+END
+$rls$;
+EXPLAIN (ANALYZE, BUFFERS, SUMMARY)
+  SELECT count(*) FROM qsa003_probe.tenant_rows_direct;
+EXPLAIN (ANALYZE, BUFFERS, SUMMARY)
+  SELECT count(*) FROM qsa003_probe.tenant_rows_initplan;
+
 -- A savepoint rollback does not end the outer transaction. The token
 -- remains valid for that same transaction and its signed Caller is unchanged.
 SAVEPOINT rt050_context_savepoint;
