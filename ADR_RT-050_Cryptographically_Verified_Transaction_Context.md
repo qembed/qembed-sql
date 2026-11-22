@@ -1,6 +1,6 @@
 # RT-050 — Cryptographically verified transaction context
 
-**Status:** Accepted remediation architecture; minimal verifier PR #69 selected as the implementation candidate; production migration and release gates remain open  
+**Status:** Accepted remediation architecture; minimal C verifier in SQL PR #69 selected as the implementation candidate; Rust signed-context transaction path merged in Rust PR #93; canonical SQL RLS migration and production release gates remain open  
 **Priority:** P0 remediation — QSA-003 remains open until production SQL/Rust migration and release gates pass  
 **Scope:** QSA-003 trust boundary; PostgreSQL identity context, Rust transaction setup, RLS policies, deployment and test contracts  
 **Branch:** `architecture/rt-050-signed-transaction-context`  
@@ -12,7 +12,7 @@ The current schema uses the custom PostgreSQL settings `app.tenant_id`, `app.pri
 
 Therefore the current design protects against accidental missing scope and application mistakes when the trusted transaction wrapper is used correctly. It does not provide an independent database boundary against arbitrary SQL executed as `qembed_runtime`.
 
-This ADR explores replacing those independently writable identity settings with one cryptographically verifiable transaction-context token.
+This ADR records the accepted replacement of independently writable identity settings with one cryptographically verifiable transaction-context token. The Rust issuer/transaction path and a PostgreSQL 19 verifier feasibility prototype exist; the canonical production SQL migration is still pending.
 
 ## 2. Proposed direction
 
@@ -47,7 +47,7 @@ The token is carried in a single setting such as `app.context_token`. The settin
 
 A token must be bound to both the database backend and the exact transaction. A token copied to another backend or transaction must fail verification.
 
-The feasibility probe established that a token bound to `pg_backend_pid()` and `pg_current_xact_id()` is accepted only in its issuing backend and transaction. It also passed commit/rollback replay, savepoint rollback, independent-backend replay, and read-only transaction-ID acquisition. The Rust-side ordering, retry orchestration and actual pool lifecycle still need to be designed and tested before production implementation.
+The PostgreSQL feasibility probe established that a token bound to `pg_backend_pid()` and `pg_current_xact_id()` is accepted only in its issuing backend and transaction. It passed commit/rollback replay, savepoint rollback, independent-backend replay, and read-only transaction-ID acquisition. Rust PR #93 then implemented the ContextIssuer and signed transaction bootstrap, including transaction-bound Caller resolution and PostgreSQL integration tests for transaction/pool lifecycle. Remaining work is to port the canonical SQL schema to the verifier contract and rerun the combined Rust/SQL suite against that migrated schema.
 
 A nonce alone does not prevent replay. If single-use semantics are required beyond backend/transaction binding, implement and test an atomic one-time-use mechanism; do not claim replay prevention merely because a nonce exists.
 
@@ -66,11 +66,11 @@ The issuer must bind the exact selected Caller, not just the Principal. PostgreS
 
 ## 6. Rust integration requirements
 
-The Rust transaction API must establish the transaction first, obtain the exact database binding, request a token from the trusted issuer, install the token, and only then execute scoped queries.
+**Implemented in Rust PR #93:** the transaction API establishes a READ COMMITTED transaction, reads backend PID / transaction ID / database OID, resolves and locks the exact Caller delegation where required, signs the claims locally, and installs `app.context_token` transaction-locally before scoped queries. `PgContext` exposes Principal-only and Caller-scoped transaction entry points. The legacy `begin_tenant_transaction` helper remains for compatibility/tests, but current production source has no caller. The SQL side must now be migrated before coordinated deployment.
 
 The public API must not allow request DTOs or callers to supply tenant, Principal, Caller, backend PID, transaction ID, expiry, or signature claims. Those values originate from authenticated application state, database transaction state, and the issuer.
 
-The implementation must define failure behavior for issuer unavailability, expired tokens, key rotation, transaction restart/retry, nested transactions and connection-pool reuse. No fallback to the current forgeable GUC identity is permitted unless an explicit temporary compatibility decision is approved.
+The Rust implementation defines bounded local signing (no remote KMS call while delegation locks are held), transaction binding, and failure on issuer/signing/database errors. The ContextIssuer is not yet wired to the KMCP lifecycle/provider adapters. No fallback to forgeable identity GUCs is permitted. SQL must not accept a mixed signed/legacy identity path.
 
 ## 7. Required prototype and acceptance tests
 
@@ -107,25 +107,25 @@ Per-tenant PostgreSQL login roles and separate connection pools remain a possibl
 
 ## 9. Decision gates before implementation
 
-- [ ] Map all current reads and writes of the three identity GUCs and every policy/function that consumes them.
-- [x] Prototype pgsodium Ed25519 verification on PostgreSQL 19 and least-privilege verifier execution. The feasibility result is recorded in section 10; production supply-chain and vendor-support approval remain pending.
+- [x] Map all current reads and writes of the three identity GUCs and every policy/function that consumes them; see `docs/QSA-003_LEGACY_GUC_CONSUMER_MAP.md` and SQL PR #70.
+- [x] Evaluate the pgsodium Ed25519 alternative on PostgreSQL 19; it is retained as historical comparison evidence only. It is not the selected implementation.
 - [x] Demonstrate the narrow backend/transaction/database/deployment binding predicate, including replay after commit/rollback, independent-backend replay, savepoint semantics, and read-only transaction-ID acquisition.
-- [ ] Complete retry orchestration, error handling and connection-pool lifecycle tests in the Rust transaction layer.
+- [x] Implement the signed transaction bootstrap and verify commit/rollback, backend/transaction binding, connection-pool reuse and tenant-context isolation in Rust PR #93; continue combined testing after the canonical SQL migration.
 - [ ] Decide whether atomic one-time-use is required in addition to backend/transaction binding.
 - [ ] Specify issuer authentication, Caller delegation validation, revocation behavior, key rotation and outage behavior.
 - [x] Prototype a minimal C verifier alternative that needs no pgsodium preload or server root key.
 - [x] Select the minimal C verifier in PR #69 as the RT-050 implementation candidate; pgsodium PR #68 is not selected for this implementation track. This is not production approval.  
 - [ ] Complete independent security review, supply-chain assessment, fuzzing, packaging/provenance work and supported PostgreSQL matrix before production approval.
 - [ ] Integrate the one-verification-per-statement `InitPlan` pattern into actual RLS helpers and benchmark representative production policies/data.
-- [ ] Produce a Rust transaction API design and migration/compatibility plan.
-- [ ] Add adversarial SQL tests before any production migration.
+- [x] Implement the Rust transaction API and compatibility boundary in Rust PR #93; migrate the canonical SQL schema and coordinate deployment remain pending.
+- [x] Add current-risk exploit-demonstration tests in SQL PR #70; inverted negative tests against the signed-context schema remain required before production migration.
 - [ ] Obtain explicit project-owner approval of the complete design.
 
 ## 10. PostgreSQL 19 feasibility prototype evidence
 
 The following is experimental evidence only. It does not implement the proposed production schema or Rust contract.
 
-- [SQL PR #68](https://github.com/qembed/qembed-sql/pull/68) builds pgsodium 3.1.11 from exact source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784` against PostgreSQL 19 and verifies the Ed25519 detached-signature API. The source commit signature is valid; the annotated `v3.1.11` tag object is unsigned.
+- Historical alternative [SQL PR #68](https://github.com/qembed/qembed-sql/pull/68) builds pgsodium 3.1.11 from exact source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784` against PostgreSQL 19 and verifies the Ed25519 detached-signature API. The source commit signature is valid; the annotated `v3.1.11` tag object is unsigned.
 - pgsodium 3.1.11's IPcrypt implementation requires libsodium 1.0.22 symbols; Debian Bookworm's libsodium 1.0.18 is insufficient. The workflow builds libsodium 1.0.22 from pinned source and asserts that pgsodium resolves `libsodium.so.26`.
 - The test-only verifier is `SECURITY DEFINER`, uses a fixed `search_path` with `pg_temp` last, reads public keys from a table inaccessible to `qembed_runtime`, and grants the runtime role verification but no signing or key-generation capability. The RLS benchmark also demonstrates the importance of an uncorrelated scalar subquery / `InitPlan` to avoid repeated verification per row.
 - [Prototype workflow run #31](https://github.com/qembed/qembed-sql/actions/runs/45020806755) and [PostgreSQL 19 / pgvector smoke run #246](https://github.com/qembed/qembed-sql/actions/runs/45020806694) passed on the tested code head `bcf65cf6141af8812849705d741f328d5e5141dc`.
@@ -142,7 +142,7 @@ A nonce is present in the probe payload but is not treated as single-use replay 
 
 ## 11. Alternative minimal verifier prototype
 
-The project owner has selected the minimal verifier in [Draft PR #69](https://github.com/qembed/qembed-sql/pull/69) as the implementation candidate for RT-050; this does not authorize production deployment or merging the prototype. The pgsodium alternative in PR #68 is not selected for this implementation track. The PR prototypes a Qembed-maintained PostgreSQL C extension with exactly one SQL function that calls libsodium `crypto_sign_verify_detached`. It passed PostgreSQL 19 CI using Debian Bookworm libsodium 1.0.18 and does not require pgsodium, `shared_preload_libraries`, a getkey script, or a server root key. It exposes no signing, key-generation, encryption, key-derivation, or DDL event-trigger API. The function rejects messages larger than 8 KiB.
+The project owner selected the minimal C verifier in [Draft SQL PR #69](https://github.com/qembed/qembed-sql/pull/69) as the implementation candidate for RT-050. PR #68 is the unselected pgsodium alternative and should remain parked; do not develop both paths in parallel. PR #69 is a feasibility prototype, not a production migration and not approval to deploy it. The PR prototypes a Qembed-maintained PostgreSQL C extension with exactly one SQL function that calls libsodium `crypto_sign_verify_detached`. It passed PostgreSQL 19 CI using Debian Bookworm libsodium 1.0.18 and does not require pgsodium, `shared_preload_libraries`, a getkey script, or a server root key. It exposes no signing, key-generation, encryption, key-derivation, or DDL event-trigger API. The function rejects messages larger than 8 KiB.
 
 The prototype now exercises the full SQL transaction-context contract. A test-only Python issuer uses ctypes/libsodium outside PostgreSQL to generate a keypair and sign the exact JSON payload bytes; only the public key is stored in a private verification-key table. The SQL verifier checks issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry time and signature. The runtime role cannot read the key table or invoke the low-level C function directly.
 
@@ -150,8 +150,8 @@ The prototype now exercises the full SQL transaction-context contract. A test-on
 
 The test-only primitive RLS fixture measured 7.280 ms direct versus 0.511 ms with an `InitPlan` on 10,000 rows in run #12. This is not a production guarantee. It isolates the C primitive and uses a fixed RFC vector; the full signed-context integration separately exercises JSON parsing, key lookup and transaction binding. These numbers are not directly comparable to the pgsodium RLS fixture, which measured a larger PL/pgSQL/key-table/claim-parsing path.
 
-The minimal extension removes pgsodium's preload/root-key operational dependency and narrows the exposed API, but it creates Qembed-maintained native C code that needs independent security review, fuzzing, packaging/provenance and a supported PostgreSQL matrix. Neither implementation is selected. The decision must compare the trusted-code burden of maintaining the small C extension against pgsodium's broader API, source provenance and preload/root-key lifecycle.
+The minimal extension removes pgsodium's preload/root-key operational dependency and narrows the exposed API. It is the selected implementation candidate, but creates Qembed-maintained native C code that still needs independent security review, fuzzing, packaging/provenance and a supported PostgreSQL matrix. The architectural selection is made; production approval is not.
 
-**Still not proven:** real Rust ContextIssuer integration, actual cross-cluster replay with two clusters, key rotation/revocation, Caller delegation/revocation race, issuer outage, retry orchestration, connection-pool lifecycle, production RLS migration and representative workload performance.
+**Still not proven:** actual cross-cluster replay with two clusters; production key rotation/revocation and external KMCP/OIDC/KMS/HSM custody; independent security review and C-extension fuzzing; ABI/build provenance, packaging/update policy and supported PostgreSQL matrix; representative production RLS workload performance; canonical SQL RLS/function migration and inverted spoofing tests; coordinated deployment and independent adversarial retest.
 
-**Implementation status:** none. This branch remains a proposed design plan; it does not alter `master`, deployed SQL, or the current Rust transaction contract.
+**Implementation status:** Rust signed-context transaction entry points are merged in `qembed-object-runtime/main` (PR #93). SQL PR #69 remains an unmerged feasibility prototype on a separate branch; SQL PR #70 contains the current-risk consumer map and exploit demonstration. The canonical SQL `master` still uses legacy identity-GUC consumers. QSA-003 remains `IN_PROGRESS`; no production deployment is approved.
