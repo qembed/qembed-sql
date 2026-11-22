@@ -28,24 +28,18 @@ GRANT USAGE ON SCHEMA pgsodium TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION pgsodium.crypto_sign_verify_detached(bytea, bytea, bytea)
   TO qembed_runtime;
 
-CREATE TEMP TABLE qsa003_verify_probe AS
-SELECT
-  pgsodium.crypto_sign_new_keypair().public AS public_key,
-  convert_to('verify from runtime role', 'UTF8') AS message;
-ALTER TABLE qsa003_verify_probe ADD COLUMN signature bytea;
-UPDATE qsa003_verify_probe
-   SET signature = pgsodium.crypto_sign_detached(
-     message,
-     (SELECT secret FROM pgsodium.crypto_sign_new_keypair())
-   );
--- Replace the preceding independently generated keypair with a matching pair.
+CREATE TEMP TABLE qsa003_verify_probe (
+  public_key bytea NOT NULL,
+  message bytea NOT NULL,
+  signature bytea NOT NULL
+);
+
 DO $$
 DECLARE
   v_pair record;
   v_message bytea := convert_to('least privilege verification', 'UTF8');
 BEGIN
   SELECT * INTO STRICT v_pair FROM pgsodium.crypto_sign_new_keypair();
-  TRUNCATE qsa003_verify_probe;
   INSERT INTO qsa003_verify_probe(public_key, message, signature)
   VALUES (
     v_pair.public,
