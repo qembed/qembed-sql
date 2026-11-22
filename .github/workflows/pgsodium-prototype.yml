@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/pgsodium-prototype.yml"
       - "tests/pgsodium_pg19_probe.sql"
+      - "tests/rt050_transaction_binding_probe.sql"
+      - "docs/QSA-003_RT050_TRANSACTION_BINDING_PROBE.md"
       - "docs/QSA-003_PGSODIUM_PROTOTYPE.md"
   workflow_dispatch:
 
@@ -74,3 +76,31 @@ jobs:
           docker cp tests/pgsodium_pg19_probe.sql qembed-pg19:/tmp/pgsodium_pg19_probe.sql
           docker exec --user postgres qembed-pg19 \
             psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/pgsodium_pg19_probe.sql
+      - name: Verify RT-050 transaction and audience binding
+        run: |
+          docker cp tests/rt050_transaction_binding_probe.sql qembed-pg19:/tmp/rt050_transaction_binding_probe.sql
+          docker exec --user postgres qembed-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/rt050_transaction_binding_probe.sql
+      - name: Verify backend binding on an independent connection
+        run: |
+          docker exec -i --user postgres qembed-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres <<'SQL'
+          SET ROLE qembed_runtime;
+          DO $$
+          DECLARE v_token record;
+          BEGIN
+            SELECT * INTO STRICT v_token FROM qsa003_probe.probe_tokens
+              WHERE test_case = 'valid';
+            IF qsa003_probe.verified_context(v_token.payload, v_token.signature) IS NOT NULL THEN
+              RAISE EXCEPTION 'token from another backend was accepted';
+            END IF;
+          END
+          $$;
+          RESET ROLE;
+          SQL
+      - name: Remove prototype fixtures
+        if: always()
+        run: |
+          docker exec --user postgres qembed-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres \
+            -c "DROP SCHEMA IF EXISTS qsa003_probe CASCADE; REVOKE ALL ON SCHEMA pgsodium FROM qembed_runtime; REVOKE EXECUTE ON FUNCTION pgsodium.crypto_sign_verify_detached(bytea, bytea, bytea) FROM qembed_runtime; DROP ROLE IF EXISTS qembed_runtime;"
