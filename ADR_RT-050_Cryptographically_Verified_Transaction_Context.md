@@ -113,7 +113,8 @@ Per-tenant PostgreSQL login roles and separate connection pools remain a possibl
 - [ ] Complete retry orchestration, error handling and connection-pool lifecycle tests in the Rust transaction layer.
 - [ ] Decide whether atomic one-time-use is required in addition to backend/transaction binding.
 - [ ] Specify issuer authentication, Caller delegation validation, revocation behavior, key rotation and outage behavior.
-- [ ] Evaluate the pgsodium shared-preload and root-key lifecycle requirement, or select an alternative verifier deployment model.
+- [x] Prototype a minimal C verifier alternative that needs no pgsodium preload or server root key.
+- [ ] Select the verifier implementation after independent security review, supply-chain assessment, and explicit evaluation of pgsodium's preload/root-key lifecycle versus Qembed's native-code maintenance burden.
 - [ ] Integrate the one-verification-per-statement `InitPlan` pattern into actual RLS helpers and benchmark representative production policies/data.
 - [ ] Produce a Rust transaction API design and migration/compatibility plan.
 - [ ] Add adversarial SQL tests before any production migration.
@@ -137,5 +138,14 @@ The CI harness also had to put pgsodium in `shared_preload_libraries`: its DDL e
 **Not yet proven:** a real Context Issuer and private-key isolation; production deployment-ID provisioning and cross-cluster uniqueness; token encoding/canonicalization shared by Rust and SQL; Caller delegation and revocation races; key rotation/revocation; issuer outage; RLS policy integration and per-row verification cost; retry/error handling; and actual connection-pool reset/reuse in Rust. The test issues tokens in a privileged SQL test session, uses a test-only verifier and fixtures, and does not replace production identity GUCs.
 
 A nonce is present in the probe payload but is not treated as single-use replay protection. Transaction binding is the tested replay boundary; any stronger one-time-use requirement remains a separate decision.
+
+## 11. Alternative minimal verifier prototype
+
+A separate [Draft PR #69](https://github.com/qembed/qembed-sql/pull/69) prototypes a Qembed-maintained PostgreSQL C extension with exactly one SQL function that calls libsodium `crypto_sign_verify_detached`. It passed PostgreSQL 19 CI using Debian Bookworm libsodium 1.0.18 and does not require pgsodium, `shared_preload_libraries`, a getkey script, or a server root key. It exposes no signing, key-generation, encryption, key-derivation, or DDL event-trigger API.
+
+The RFC 8032 primitive test passes and altered signatures/messages and invalid key/signature lengths are rejected. The test-only RLS wrapper measured 7.377 ms direct versus 0.480 ms with an `InitPlan` on 10,000 rows. This fixture uses a fixed test vector and isolates the C primitive; it does not parse signed claims or perform key-table lookup. It is therefore not directly comparable to the pgsodium RLS fixture, which includes PL/pgSQL, key-table access and JSON claim parsing.
+
+The minimal extension removes pgsodium's preload/root-key operational dependency and narrows the exposed API, but it creates Qembed-maintained native C code that needs independent security review, fuzzing, packaging/provenance and a supported PostgreSQL matrix. Neither implementation is selected. The decision must compare the trusted-code burden of maintaining the small C extension against pgsodium's broader API, source provenance and preload/root-key lifecycle.
+
 
 **Implementation status:** none. This branch remains a proposed design plan; it does not alter `master`, deployed SQL, or the current Rust transaction contract.
