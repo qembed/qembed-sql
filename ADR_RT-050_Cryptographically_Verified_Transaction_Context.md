@@ -1,6 +1,6 @@
 # RT-050 — Cryptographically verified transaction context
 
-**Status:** Proposed architecture plan; PostgreSQL 19 verifier/binding feasibility prototyped, production design intentionally not implemented  
+**Status:** Proposed architecture plan; minimal verifier PR #69 selected by the project owner as the RT-050 implementation candidate; production design intentionally not implemented  
 **Priority:** Deferred — revisit after completion of the SQL adversarial audit  
 **Scope:** QSA-003 trust boundary; PostgreSQL identity context, Rust transaction setup, RLS policies, deployment and test contracts  
 **Branch:** `architecture/rt-050-signed-transaction-context`  
@@ -114,7 +114,8 @@ Per-tenant PostgreSQL login roles and separate connection pools remain a possibl
 - [ ] Decide whether atomic one-time-use is required in addition to backend/transaction binding.
 - [ ] Specify issuer authentication, Caller delegation validation, revocation behavior, key rotation and outage behavior.
 - [x] Prototype a minimal C verifier alternative that needs no pgsodium preload or server root key.
-- [ ] Select the verifier implementation after independent security review, supply-chain assessment, and explicit evaluation of pgsodium's preload/root-key lifecycle versus Qembed's native-code maintenance burden.
+- [x] Select the minimal C verifier in PR #69 as the RT-050 implementation candidate; pgsodium PR #68 is not selected for this implementation track. This is not production approval.  
+- [ ] Complete independent security review, supply-chain assessment, fuzzing, packaging/provenance work and supported PostgreSQL matrix before production approval.
 - [ ] Integrate the one-verification-per-statement `InitPlan` pattern into actual RLS helpers and benchmark representative production policies/data.
 - [ ] Produce a Rust transaction API design and migration/compatibility plan.
 - [ ] Add adversarial SQL tests before any production migration.
@@ -141,7 +142,7 @@ A nonce is present in the probe payload but is not treated as single-use replay 
 
 ## 11. Alternative minimal verifier prototype
 
-A separate [Draft PR #69](https://github.com/qembed/qembed-sql/pull/69) prototypes a Qembed-maintained PostgreSQL C extension with exactly one SQL function that calls libsodium `crypto_sign_verify_detached`. It passed PostgreSQL 19 CI using Debian Bookworm libsodium 1.0.18 and does not require pgsodium, `shared_preload_libraries`, a getkey script, or a server root key. It exposes no signing, key-generation, encryption, key-derivation, or DDL event-trigger API. The function rejects messages larger than 8 KiB.
+The project owner has selected the minimal verifier in [Draft PR #69](https://github.com/qembed/qembed-sql/pull/69) as the implementation candidate for RT-050; this does not authorize production deployment or merging the prototype. The pgsodium alternative in PR #68 is not selected for this implementation track. The PR prototypes a Qembed-maintained PostgreSQL C extension with exactly one SQL function that calls libsodium `crypto_sign_verify_detached`. It passed PostgreSQL 19 CI using Debian Bookworm libsodium 1.0.18 and does not require pgsodium, `shared_preload_libraries`, a getkey script, or a server root key. It exposes no signing, key-generation, encryption, key-derivation, or DDL event-trigger API. The function rejects messages larger than 8 KiB.
 
 The prototype now exercises the full SQL transaction-context contract. A test-only Python issuer uses ctypes/libsodium outside PostgreSQL to generate a keypair and sign the exact JSON payload bytes; only the public key is stored in a private verification-key table. The SQL verifier checks issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry time and signature. The runtime role cannot read the key table or invoke the low-level C function directly.
 
