@@ -55,7 +55,7 @@ This is approximately 748x in this small test and is not a general production be
 
 ## pgsodium preload requirement
 
-The CI environment preloads pgsodium through `shared_preload_libraries` and installs the test-only `tests/pgsodium_getkey_test.sh` provider. This was necessary because pgsodium defines `pgsodium.enable_event_trigger` during shared preload; without preload, its DDL event trigger failed on table creation with an unrecognized-setting error. The preload path also requires a getkey script and loads a root key into server memory. The probe's provider creates only an ephemeral key inside the disposable CI container; it is not a production key-management recommendation.
+The CI environment preloads pgsodium through `shared_preload_libraries` and installs the test-only `tests/pgsodium_getkey_test.sh` provider. This was necessary because pgsodium defines `pgsodium.enable_event_trigger` during shared preload; without preload, its DDL event trigger failed on table creation with an unrecognized-setting error. The preload path also requires a getkey script and loads a root key into server memory. The probe's provider returns a fresh random 32-byte key at startup without persisting it. This is suitable only because the probe does not use pgsodium server-managed key derivation or key-ID APIs; it is not a production key-management recommendation.
 
 Production adoption must explicitly evaluate the global preload/restart requirement, secure root-key provisioning, rotation, recovery and operational ownership. The Ed25519 verification probe itself uses raw public-key verification and does not use the pgsodium root key.
 
