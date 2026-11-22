@@ -18,6 +18,8 @@ CREATE TABLE qembed_crypto.verification_keys (
   deployment_id text NOT NULL
 );
 
+-- Stable for one statement: statement_timestamp and the already-established XID
+-- keep the RLS scalar subquery eligible for a single InitPlan evaluation.
 CREATE FUNCTION qembed_crypto.verified_context(p_token text)
 RETURNS jsonb
 LANGUAGE plpgsql STABLE
