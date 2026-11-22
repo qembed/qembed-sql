@@ -1,6 +1,6 @@
 # QSA-003 — signed-context SQL consumer migration
 
-**Status:** Draft migration; not production-approved and not a QSA-003 closure.
+**Status:** Draft migration candidate; not production-approved and not a QSA-003 closure. It has been exercised in the prototype fixture, not yet applied to the canonical clean-install schema.
 
 ## Purpose
 
@@ -29,8 +29,7 @@ hard preflight and refuses to run until all four verifier functions exist:
 3. Install the typed `current_*_id()` accessors.
 4. Apply the canonical clean-install schema at the same revision as this migration.
 5. Apply `rt050_signed_context_rls.sql`.
-6. Deploy the matching Rust ContextIssuer and transaction entry points before
-   sending tenant traffic through the migrated schema.
+6. Deploy the Rust ContextIssuer and signed repository entry points already merged in Rust PR #93 before sending tenant traffic through the migrated schema.
 
 The verifier fixture in the PR stack is still a feasibility harness. It is not
 itself the production key-registry deployment or an operator runbook.
@@ -60,22 +59,20 @@ the new policies fail closed and return no tenant rows. Do not apply it to a liv
 deployment until all repository transaction entry points use the signed-context
 API and the matching ContextIssuer is deployed.
 
-The old GUCs may still be set temporarily by legacy Rust bootstrap code during
-the transition, but after this migration they have no authorization effect.
-The next Rust stage must update the Caller resolver call to pass all three
-explicit identifiers and add negative tests that forge each legacy GUC while
-asserting effective identity remains unchanged.
+Current Rust `main` no longer uses the legacy GUC transaction bootstrap on production repository paths. `begin_tenant_transaction` remains only as a compatibility/test helper. Once this SQL migration is applied, the old GUCs must have no authorization effect. The Rust PR #93 integration tests already exercise the explicit Caller resolution contract against the prototype; the canonical-schema migration must repeat those tests and add/retain negative spoofing assertions on the production schema.
 
 ## Validation gates still required
 
 - Apply this migration to the canonical schema in PostgreSQL 19 with the real
   verifier extension and staged/active test key.
-- Exercise it through the actual Rust ContextIssuer for both Caller-scoped and
-  Principal-only tokens.
+- [x] Exercise the prototype through the actual Rust ContextIssuer for both Caller-scoped and
+  Principal-only tokens (Rust PR #93 merged).
+- [ ] Repeat this integration against the canonical clean-install SQL schema.
 - As `qembed_runtime`, prove tenant/Principal/Caller GUC forgery cannot alter
   RLS visibility or delegation authority.
-- Verify commit, rollback, savepoint, pool reuse, expiry, same-backend replay and
-  cross-backend replay behavior.
+- [x] Verify commit, rollback, savepoint, pool reuse, expiry, same-backend replay and
+  cross-backend replay behavior against the prototype fixture (Rust PR #93).
+- [ ] Repeat against the canonical SQL migration.
 - Run the full SQL and Rust integration suites and inspect RLS query plans.
 - Complete extension packaging/provenance, fuzzing, independent security review,
   supported PostgreSQL matrix and workload benchmark.
