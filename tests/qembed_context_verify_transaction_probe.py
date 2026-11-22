@@ -408,7 +408,7 @@ def main():
         )
         privileges = cursor.fetchone()
         if any(privileges):
-            raise AssertionError("runtime has key registry, audit, low-level verifier, management or metadata-reader privileges")
+            raise AssertionError("runtime has key registry, audit, low-level verifier, management, metadata-reader or audit-export privileges")
 
         tampered = bytearray(signature)
         tampered[0] ^= 1
