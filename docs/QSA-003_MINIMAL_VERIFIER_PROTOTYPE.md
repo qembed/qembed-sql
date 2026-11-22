@@ -55,7 +55,7 @@ This is still an external test issuer, not an invocation of the Rust `ContextIss
 
 ## Principal-only and Caller-scoped contexts
 
-Version 1 keeps a fixed 14-claim object. `caller_id` is always present: a UUID string means an explicitly selected, database-validated Caller; JSON `null` means a Principal-only context. The SQL accessor returns SQL NULL for the latter. There is no Principal-to-Caller fallback. Caller-scoped episodic-memory policies must fail closed when the claim is null.
+Version 1 keeps a fixed 14-claim object. `caller_id` is always present: a UUID string means an explicitly selected, database-validated Caller; JSON `null` means a Principal-only context. The SQL accessor returns SQL NULL for the latter. There is no Principal-to-Caller fallback. Caller-scoped episodic-memory policies must fail closed when the claim is null. The PostgreSQL fixture also includes a Caller-scoped RLS table: Caller-scoped tokens see only their Caller rows, while Principal-only tokens see none.
 
 ## Limitations and remaining gates
 
