@@ -23,6 +23,8 @@ The PostgreSQL 19 workflow builds the extension against the distribution's libso
 - confirms the runtime role cannot call the low-level verifier directly or create objects in its schema;
 - runs the same test-only RLS plan comparison: direct verifier call versus an uncorrelated scalar subquery expected to become an `InitPlan`.
 
+The PostgreSQL 19 CI run #2 measured the direct C verifier policy at 7.377 ms and the `InitPlan` form at 0.480 ms on the same 10,000-row fixture (5,000 visible rows, no tenant index), approximately 15.4x. This is a microbenchmark, not a production guarantee. Unlike the pgsodium test, the minimal C function does not query a verification-key table or parse claims; the result isolates the primitive's per-row call overhead.
+
 ## Limitations
 
 - This is new Qembed-maintained native C code and needs independent security review, fuzzing, ABI/build provenance, supported PostgreSQL matrix, and packaging/update policy.
@@ -32,3 +34,7 @@ The PostgreSQL 19 workflow builds the extension against the distribution's libso
 - The prototype is in `qembed-sql` only for evaluation; if adopted, extension source/package ownership and release lifecycle must be decided explicitly.
 
 Compare this branch with [the pgsodium prototype PR #68](https://github.com/qembed/qembed-sql/pull/68). Neither prototype is production-approved.
+
+## Validation evidence
+
+- [Minimal verifier workflow run #2](https://github.com/qembed/qembed-sql/actions/runs/45022889464) passed on the PostgreSQL 19 / pgvector 0.8.7 image using Debian Bookworm libsodium 1.0.18. The build emitted no compiler warnings in the captured job log.
