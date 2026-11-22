@@ -191,6 +191,60 @@ $$;
 RESET ROLE;
 COMMIT;
 
+-- A token captured from a transaction that is rolled back must not
+-- authorize the next transaction on the same backend.
+BEGIN;
+SELECT
+  encode(token.payload, 'hex') AS rollback_payload_hex,
+  encode(pgsodium.crypto_sign_detached(token.payload, issuer.secret_key), 'hex')
+    AS rollback_signature_hex
+FROM (
+  SELECT convert_to(jsonb_build_object(
+    'tenant_id', '10000000-0000-0000-0000-000000000001',
+    'principal_id', '20000000-0000-0000-0000-000000000001',
+    'caller_id', '30000000-0000-0000-0000-000000000001',
+    'backend_pid', pg_backend_pid(),
+    'transaction_id', pg_current_xact_id()::text,
+    'database_oid', (SELECT oid::text FROM pg_database WHERE datname = current_database()),
+    'deployment_id', 'probe-deployment-1',
+    'issuer', 'urn:qembed:context-issuer:probe',
+    'audience', 'urn:qembed:postgres:deployment:probe-1:database:' ||
+      (SELECT oid::text FROM pg_database WHERE datname = current_database()),
+    'key_id', 'probe-key-1',
+    'issued_at', clock_timestamp(),
+    'expires_at', clock_timestamp() + interval '30 seconds',
+    'nonce', gen_random_uuid()
+  )::text, 'UTF8') AS payload
+) AS token
+CROSS JOIN pg_temp.qsa003_issuer_material AS issuer
+\gset
+ROLLBACK;
+
+-- Preserve the signed bytes outside the transaction being rolled back.
+SELECT set_config('qsa003.rollback_payload', :'rollback_payload_hex', false);
+SELECT set_config('qsa003.rollback_signature', :'rollback_signature_hex', false);
+BEGIN;
+SET ROLE qembed_runtime;
+DO $
+BEGIN
+  IF qsa003_probe.verified_context(
+    decode(current_setting('qsa003.rollback_payload'), 'hex'),
+    decode(current_setting('qsa003.rollback_signature'), 'hex')
+  ) IS NOT NULL THEN
+    RAISE EXCEPTION 'rolled-back transaction token replayed in a later transaction';
+  END IF;
+END
+$;
+RESET ROLE;
+COMMIT;
+RESET qsa003.rollback_payload;
+RESET qsa003.rollback_signature;
+
+-- Verify transaction-ID acquisition works in a read-only transaction.
+BEGIN READ ONLY;
+SELECT pg_current_xact_id() AS read_only_transaction_id;
+COMMIT;
+
 -- Workflow checks backend binding through a second independent connection.
 DO $$
 DECLARE v_config text[];
