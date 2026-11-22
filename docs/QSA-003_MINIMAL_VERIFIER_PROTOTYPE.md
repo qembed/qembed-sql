@@ -40,7 +40,7 @@ The SQL verifier:
 - uses the untrusted `key_id` only to locate a candidate public key, verifies the signature over the original payload bytes, and trusts no claim until verification succeeds;
 - enforces verification-key lifecycle states: `active` accepts tokens issued after activation; `retired` rejects newly issued tokens but accepts pre-retirement tokens only until a bounded verification deadline; `revoked` rejects all tokens immediately;
 - exposes privileged `retire_verification_key` and `revoke_verification_key` operations, while the runtime role cannot read or mutate the key registry or execute lifecycle functions;
-- enforces monotonic transitions (`active -> retired -> revoked`, or `active -> revoked`), immutable key identity/public material, retained audit rows, and a minimum 90-second retirement grace (maximum one hour);
+- enforces monotonic transitions (`active -> retired -> revoked`, or `active -> revoked`), immutable key identity/public material, retained audit rows, and a minimum 120-second retirement grace (maximum one hour);
 - validates the exact 14 version-1 string claims, lowercase UUID syntax (including nonce), issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry times and the 60-second maximum lifetime;
 - exposes typed tenant, Principal and Caller accessors;
 - reads authorization context only from `app.context_token`.
