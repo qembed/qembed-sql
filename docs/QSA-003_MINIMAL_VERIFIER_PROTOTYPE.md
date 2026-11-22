@@ -29,7 +29,7 @@ In run #13, the 10,000-row primitive fixture measured 7.280 ms for direct C veri
 
 ### Full transaction-bound context probe
 
-A separate external Python test issuer uses libsodium to generate an Ed25519 keypair and signs the exact UTF-8 JSON bytes produced by an RFC 8785 JCS implementation. This replaces the earlier `json.dumps(sort_keys=True)` approximation, which is not a general RFC 8785 implementation. The private key remains in the issuer process; only the public key is inserted into a private verification-key table.
+A separate external Python test issuer uses libsodium to generate an Ed25519 keypair and signs the exact UTF-8 JSON bytes produced by the pinned RFC 8785 JCS implementation (`rfc8785==0.1.4`). This replaces the earlier `json.dumps(sort_keys=True)` approximation, which is not a general RFC 8785 implementation. The private key remains in the issuer process; only the public key is inserted into a private verification-key table.
 
 The test issuer now emits the same wire envelope as Rust:
 
@@ -38,7 +38,7 @@ The test issuer now emits the same wire envelope as Rust:
 The SQL verifier:
 - rejects unknown envelope versions, malformed/lowercase-hex violations, invalid signature lengths and payloads above 8 KiB;
 - uses the untrusted `key_id` only to locate a candidate public key, verifies the signature over the original payload bytes, and trusts no claim until verification succeeds;
-- validates all version-1 required string claims, UUID syntax, issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry times and the 60-second maximum lifetime;
+- validates the exact 14 version-1 string claims, lowercase UUID syntax (including nonce), issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry times and the 60-second maximum lifetime;
 - exposes typed tenant, Principal and Caller accessors;
 - reads authorization context only from `app.context_token`.
 
