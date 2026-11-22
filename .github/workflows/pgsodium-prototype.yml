@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/pgsodium-prototype.yml"
       - "tests/pgsodium_pg19_probe.sql"
+      - "tests/pgsodium_getkey_test.sh"
       - "tests/rt050_transaction_binding_probe.sql"
       - "docs/QSA-003_RT050_TRANSACTION_BINDING_PROBE.md"
       - "docs/QSA-003_PGSODIUM_PROTOTYPE.md"
@@ -60,8 +61,13 @@ jobs:
             ldd /tmp/pgsodium-src/pgsodium.so | grep "/usr/local/lib/libsodium.so.26"
             make -C /tmp/pgsodium-src PG_CONFIG="$(command -v pg_config)" SHLIB_LINK="-L/usr/local/lib -lsodium" install
           '
-      - name: Restart PostgreSQL to load libsodium 1.0.22
+      - name: Configure pgsodium preload and restart PostgreSQL
         run: |
+          docker cp tests/pgsodium_getkey_test.sh qembed-pg19:/usr/share/postgresql/19/extension/pgsodium_getkey
+          docker exec --user root qembed-pg19 chmod 755 /usr/share/postgresql/19/extension/pgsodium_getkey
+          docker exec --user postgres qembed-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres \
+            -c "ALTER SYSTEM SET shared_preload_libraries = 'pgsodium';"
           docker restart qembed-pg19
           for attempt in $(seq 1 60); do
             if docker exec qembed-pg19 pg_isready -U postgres -d postgres; then
