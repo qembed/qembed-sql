@@ -168,6 +168,12 @@ AS $stage$
 DECLARE
   v_operation text;
   v_existing_key_id text;
+  v_existing_actor text;
+  v_existing_reason text;
+  v_existing_public_key bytea;
+  v_existing_issuer text;
+  v_existing_audience text;
+  v_existing_deployment text;
 BEGIN
   IF session_user <> 'qembed_key_control_plane' THEN
     RAISE EXCEPTION 'key management requires the dedicated control-plane identity';
@@ -177,14 +183,24 @@ BEGIN
     RAISE EXCEPTION 'request ID, actor subject and reason are required';
   END IF;
 
-  SELECT operation, key_id INTO v_operation, v_existing_key_id
-  FROM qembed_crypto.key_lifecycle_audit
-  WHERE request_id = p_request_id;
+  SELECT a.operation, a.key_id, a.actor_subject, a.reason,
+         k.public_key, k.issuer, k.audience, k.deployment_id
+  INTO v_operation, v_existing_key_id, v_existing_actor, v_existing_reason,
+       v_existing_public_key, v_existing_issuer, v_existing_audience, v_existing_deployment
+  FROM qembed_crypto.key_lifecycle_audit AS a
+  JOIN qembed_crypto.verification_keys AS k USING (key_id)
+  WHERE a.request_id = p_request_id;
   IF FOUND THEN
-    IF v_operation = 'stage' AND v_existing_key_id = p_key_id THEN
+    IF v_operation = 'stage' AND v_existing_key_id = p_key_id
+       AND v_existing_actor IS NOT DISTINCT FROM p_actor_subject
+       AND v_existing_reason IS NOT DISTINCT FROM p_reason
+       AND v_existing_public_key IS NOT DISTINCT FROM p_public_key
+       AND v_existing_issuer IS NOT DISTINCT FROM p_issuer
+       AND v_existing_audience IS NOT DISTINCT FROM p_audience
+       AND v_existing_deployment IS NOT DISTINCT FROM p_deployment_id THEN
       RETURN;
     END IF;
-    RAISE EXCEPTION 'request ID was already used for a different key operation';
+    RAISE EXCEPTION 'request ID was already used with a different key operation or payload';
   END IF;
 
   INSERT INTO qembed_crypto.verification_keys
@@ -214,6 +230,9 @@ AS $activate$
 DECLARE
   v_operation text;
   v_existing_key_id text;
+  v_existing_actor text;
+  v_existing_approver text;
+  v_existing_reason text;
   v_activated_at timestamptz;
   v_old_state text;
 BEGIN
@@ -227,16 +246,20 @@ BEGIN
     RAISE EXCEPTION 'distinct operator and approver, request ID and reason are required';
   END IF;
 
-  SELECT operation, key_id INTO v_operation, v_existing_key_id
+  SELECT operation, key_id, actor_subject, approver_subject, reason
+  INTO v_operation, v_existing_key_id, v_existing_actor, v_existing_approver, v_existing_reason
   FROM qembed_crypto.key_lifecycle_audit
   WHERE request_id = p_request_id;
   IF FOUND THEN
-    IF v_operation = 'activate' AND v_existing_key_id = p_key_id THEN
+    IF v_operation = 'activate' AND v_existing_key_id = p_key_id
+       AND v_existing_actor IS NOT DISTINCT FROM p_actor_subject
+       AND v_existing_approver IS NOT DISTINCT FROM p_approver_subject
+       AND v_existing_reason IS NOT DISTINCT FROM p_reason THEN
       SELECT activated_at INTO v_activated_at
       FROM qembed_crypto.verification_keys WHERE key_id = p_key_id;
       RETURN v_activated_at;
     END IF;
-    RAISE EXCEPTION 'request ID was already used for a different key operation';
+    RAISE EXCEPTION 'request ID was already used with a different key operation or payload';
   END IF;
 
   SELECT status INTO v_old_state
@@ -279,6 +302,10 @@ AS $retire$
 DECLARE
   v_operation text;
   v_existing_key_id text;
+  v_existing_actor text;
+  v_existing_approver text;
+  v_existing_reason text;
+  v_existing_grace interval;
   v_retired_at timestamptz := clock_timestamp();
   v_verify_until timestamptz;
   v_old_state text;
@@ -297,16 +324,24 @@ BEGIN
     RAISE EXCEPTION 'verification grace must be between 120 seconds and 1 hour';
   END IF;
 
-  SELECT operation, key_id INTO v_operation, v_existing_key_id
-  FROM qembed_crypto.key_lifecycle_audit
-  WHERE request_id = p_request_id;
+  SELECT a.operation, a.key_id, a.actor_subject, a.approver_subject, a.reason,
+         k.verify_until - k.retired_at
+  INTO v_operation, v_existing_key_id, v_existing_actor, v_existing_approver,
+       v_existing_reason, v_existing_grace
+  FROM qembed_crypto.key_lifecycle_audit AS a
+  JOIN qembed_crypto.verification_keys AS k USING (key_id)
+  WHERE a.request_id = p_request_id;
   IF FOUND THEN
-    IF v_operation = 'retire' AND v_existing_key_id = p_key_id THEN
+    IF v_operation = 'retire' AND v_existing_key_id = p_key_id
+       AND v_existing_actor IS NOT DISTINCT FROM p_actor_subject
+       AND v_existing_approver IS NOT DISTINCT FROM p_approver_subject
+       AND v_existing_reason IS NOT DISTINCT FROM p_reason
+       AND v_existing_grace IS NOT DISTINCT FROM p_verification_grace THEN
       SELECT verify_until INTO v_verify_until
       FROM qembed_crypto.verification_keys WHERE key_id = p_key_id;
       RETURN v_verify_until;
     END IF;
-    RAISE EXCEPTION 'request ID was already used for a different key operation';
+    RAISE EXCEPTION 'request ID was already used with a different key operation or payload';
   END IF;
 
   SELECT status INTO v_old_state
@@ -349,6 +384,8 @@ AS $revoke$
 DECLARE
   v_operation text;
   v_existing_key_id text;
+  v_existing_actor text;
+  v_existing_reason text;
   v_revoked_at timestamptz := clock_timestamp();
   v_old_state text;
 BEGIN
@@ -360,16 +397,19 @@ BEGIN
     RAISE EXCEPTION 'break-glass actor, incident reference and request ID are required';
   END IF;
 
-  SELECT operation, key_id INTO v_operation, v_existing_key_id
+  SELECT operation, key_id, actor_subject, reason
+  INTO v_operation, v_existing_key_id, v_existing_actor, v_existing_reason
   FROM qembed_crypto.key_lifecycle_audit
   WHERE request_id = p_request_id;
   IF FOUND THEN
-    IF v_operation = 'revoke' AND v_existing_key_id = p_key_id THEN
+    IF v_operation = 'revoke' AND v_existing_key_id = p_key_id
+       AND v_existing_actor IS NOT DISTINCT FROM p_actor_subject
+       AND v_existing_reason IS NOT DISTINCT FROM p_reason THEN
       SELECT revoked_at INTO v_revoked_at
       FROM qembed_crypto.verification_keys WHERE key_id = p_key_id;
       RETURN v_revoked_at;
     END IF;
-    RAISE EXCEPTION 'request ID was already used for a different key operation';
+    RAISE EXCEPTION 'request ID was already used with a different key operation or payload';
   END IF;
 
   SELECT status INTO v_old_state
