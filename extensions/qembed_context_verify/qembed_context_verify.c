@@ -7,6 +7,8 @@
 
 PG_MODULE_MAGIC;
 
+#define QEMBED_CONTEXT_MAX_MESSAGE_BYTES 8192
+
 PGDLLEXPORT void _PG_init(void);
 PG_FUNCTION_INFO_V1(qembed_context_verify_detached);
 
@@ -30,7 +32,8 @@ qembed_context_verify_detached(PG_FUNCTION_ARGS)
     int result;
 
     if (signature_len != crypto_sign_BYTES ||
-        public_key_len != crypto_sign_PUBLICKEYBYTES)
+        public_key_len != crypto_sign_PUBLICKEYBYTES ||
+        message_len > QEMBED_CONTEXT_MAX_MESSAGE_BYTES)
         PG_RETURN_BOOL(false);
 
     result = crypto_sign_verify_detached(
