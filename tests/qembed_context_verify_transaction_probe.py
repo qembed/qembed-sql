@@ -455,6 +455,8 @@ def main():
                 raise AssertionError("malformed token envelope was accepted")
         assert_invalid(cursor, sign, "malformed signed JSON", payload_override=b"not-json", signature_override=sign(b"not-json"))
         assert_invalid(cursor, sign, "unknown claim", {"unexpected_claim": "not-allowed"})
+        assert_invalid(cursor, sign, "non-string Caller claim", {"caller_id": 17})
+        assert_invalid(cursor, sign, "malformed Caller claim", {"caller_id": "not-a-uuid"})
         assert_invalid(cursor, sign, "unknown key", {"key_id": "not-registered"})
         assert_invalid(cursor, sign, "wrong backend", {"backend_pid": str(int(claims["backend_pid"]) + 1)})
         assert_invalid(cursor, sign, "wrong transaction", {"transaction_id": str(int(claims["transaction_id"]) + 1)})
