@@ -4,6 +4,7 @@
 import ctypes
 import ctypes.util
 import datetime as dt
+import os
 import uuid
 
 import psycopg2
@@ -19,6 +20,7 @@ TENANT_A = "10000000-0000-0000-0000-000000000001"
 TENANT_B = "10000000-0000-0000-0000-000000000002"
 PRINCIPAL = "20000000-0000-0000-0000-000000000001"
 CALLER = "30000000-0000-0000-0000-000000000001"
+CALLER_B = "30000000-0000-0000-0000-000000000002"
 
 
 def connect():
@@ -349,7 +351,7 @@ def main():
             "SELECT set_config('app.tenant_id', %s, true), "
             "set_config('app.principal_id', %s, true), "
             "set_config('app.caller_id', %s, true)",
-            (TENANT_B, TENANT_B, TENANT_B),
+            (TENANT_B, TENANT_B, CALLER_B),
         )
         cursor.execute("SET ROLE qembed_runtime")
 
@@ -385,6 +387,13 @@ def main():
         cursor.execute("SELECT qembed_crypto.current_tenant_id(), qembed_crypto.current_principal_id()")
         if tuple(str(value) for value in cursor.fetchone()) != (TENANT_A, PRINCIPAL):
             raise AssertionError("Principal-only context lost its tenant or Principal identity")
+        if os.environ.get("QSA003_FULL_SCHEMA") == "1":
+            cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'episodic'")
+            if cursor.fetchone()[0] != 0:
+                raise AssertionError("Principal-only token exposed Caller-scoped episodic memory")
+            cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'semantic'")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("Principal-only token lost tenant-scoped semantic memory")
         cursor.execute("SELECT set_config('app.context_token', %s, true)", (token,))
 
         cursor.execute(
@@ -395,6 +404,17 @@ def main():
         row_count, only_signed_tenant = cursor.fetchone()
         if row_count != 5 or not only_signed_tenant:
             raise AssertionError("RLS trusted a forged identity GUC instead of signed tenant claim")
+
+        if os.environ.get("QSA003_FULL_SCHEMA") == "1":
+            cursor.execute("SELECT count(*) FROM objects")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("canonical objects RLS trusted the forged tenant GUC")
+            cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'episodic'")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("canonical episodic-memory RLS trusted the forged Caller GUC")
+            cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'semantic'")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("canonical semantic memory should remain tenant-scoped")
 
         cursor.execute(
             "EXPLAIN (FORMAT JSON) SELECT count(*) FROM qembed_crypto.tenant_rows"
@@ -545,12 +565,13 @@ def main():
         cursor.close()
         connection.close()
 
-    cleanup = connect()
-    cleanup.autocommit = True
-    with cleanup.cursor() as cursor:
-        cursor.execute("DROP SCHEMA qembed_crypto CASCADE")
-        cursor.execute("DROP ROLE qembed_runtime")
-    cleanup.close()
+    if os.environ.get("QSA003_KEEP_SCHEMA") != "1":
+        cleanup = connect()
+        cleanup.autocommit = True
+        with cleanup.cursor() as cursor:
+            cursor.execute("DROP SCHEMA qembed_crypto CASCADE")
+            cursor.execute("DROP ROLE qembed_runtime")
+        cleanup.close()
 
 
 if __name__ == "__main__":
