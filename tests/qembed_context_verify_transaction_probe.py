@@ -157,11 +157,15 @@ def main():
             "has_table_privilege(current_user, "
             "'qembed_crypto.key_lifecycle_audit', 'SELECT'), "
             "has_function_privilege(current_user, "
-            "'qembed_crypto.stage_verification_key(text,bytea,text,text,text,text,uuid,text)', 'EXECUTE')"
+            "'qembed_crypto.stage_verification_key(text,bytea,text,text,text,text,uuid,text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.list_verification_keys(text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.get_key_lifecycle_operation(uuid)', 'EXECUTE')"
         )
-        can_read_keys, can_insert_keys, can_read_audit, can_stage = cursor.fetchone()
-        if can_read_keys or can_insert_keys or can_read_audit or not can_stage:
-            raise AssertionError("control plane must use narrow management functions, not direct table access")
+        can_read_keys, can_insert_keys, can_read_audit, can_stage, can_list, can_read_operation = cursor.fetchone()
+        if can_read_keys or can_insert_keys or can_read_audit or not can_stage or not can_list or not can_read_operation:
+            raise AssertionError("control plane must use narrow management/read functions, not direct table access")
 
         primary_stage_request_id = str(uuid.uuid4())
         cursor.execute(
@@ -227,6 +231,20 @@ def main():
                 str(uuid.uuid4()), "test-only key activation",
             ),
         )
+        cursor.execute(
+            "SELECT key_id, status FROM qembed_crypto.list_verification_keys(%s) "
+            "WHERE key_id IN (%s, %s) ORDER BY key_id",
+            (DEPLOYMENT, KEY_ID, STAGED_KEY_ID),
+        )
+        key_rows = cursor.fetchall()
+        if {row[0]: row[1] for row in key_rows} != {KEY_ID: "active", STAGED_KEY_ID: "staged"}:
+            raise AssertionError("control-plane metadata reader returned incorrect key states")
+        cursor.execute(
+            "SELECT operation, new_state FROM qembed_crypto.get_key_lifecycle_operation(%s)",
+            (primary_stage_request_id,),
+        )
+        if cursor.fetchone() != ("stage", "staged"):
+            raise AssertionError("control-plane audit reader returned incorrect lifecycle evidence")
         cursor.execute("RESET SESSION AUTHORIZATION")
         cursor.execute(
             "SELECT event_id FROM qembed_crypto.key_lifecycle_audit ORDER BY event_id LIMIT 1"
@@ -299,11 +317,15 @@ def main():
             "has_function_privilege(current_user, "
             "'qembed_crypto.retire_verification_key(text,interval,text,text,uuid,text)', 'EXECUTE'), "
             "has_function_privilege(current_user, "
-            "'qembed_crypto.revoke_verification_key(text,text,uuid,text)', 'EXECUTE')"
+            "'qembed_crypto.revoke_verification_key(text,text,uuid,text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.list_verification_keys(text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.get_key_lifecycle_operation(uuid)', 'EXECUTE')"
         )
         privileges = cursor.fetchone()
         if any(privileges):
-            raise AssertionError("runtime has key registry, audit, low-level verifier or key-management privileges")
+            raise AssertionError("runtime has key registry, audit, low-level verifier, management or metadata-reader privileges")
 
         tampered = bytearray(signature)
         tampered[0] ^= 1
