@@ -394,6 +394,9 @@ def main():
             cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'semantic'")
             if cursor.fetchone()[0] != 1:
                 raise AssertionError("Principal-only token lost tenant-scoped semantic memory")
+            cursor.execute("SELECT count(*) FROM objects")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("Principal-only token lost tenant-scoped object visibility")
         cursor.execute("SELECT set_config('app.context_token', %s, true)", (token,))
 
         cursor.execute(
@@ -415,6 +418,51 @@ def main():
             cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'semantic'")
             if cursor.fetchone()[0] != 1:
                 raise AssertionError("canonical semantic memory should remain tenant-scoped")
+
+            cursor.execute(
+                "SELECT caller_id::text, caller_kind FROM resolve_delegated_caller(%s::uuid, %s::uuid, %s::uuid)",
+                (TENANT_A, PRINCIPAL, CALLER),
+            )
+            if cursor.fetchone() != (CALLER, "Authenticated"):
+                raise AssertionError("explicit pre-token Caller resolver did not honor its bound identity arguments")
+
+            cursor.execute(
+                "SELECT grant_caller_delegation(%s::uuid)",
+                (CALLER_B,),
+            )
+            forged_principal_delegation = str(cursor.fetchone()[0])
+            cursor.execute(
+                "SELECT principal_id::text FROM principal_caller_delegations WHERE delegation_id = %s::uuid",
+                (forged_principal_delegation,),
+            )
+            if cursor.fetchone()[0] != PRINCIPAL:
+                raise AssertionError("delegation grant trusted forged Principal GUC instead of signed Principal claim")
+
+            cursor.execute(
+                "SELECT revoke_caller_delegation(%s::uuid)",
+                (forged_principal_delegation,),
+            )
+            if cursor.fetchone()[0] is not True:
+                raise AssertionError("signed Principal could not revoke its own delegation")
+            cursor.execute(
+                "SELECT revoked_by_principal_id::text FROM principal_caller_delegations WHERE delegation_id = %s::uuid",
+                (forged_principal_delegation,),
+            )
+            if cursor.fetchone()[0] != PRINCIPAL:
+                raise AssertionError("delegation revoke trusted forged Principal GUC")
+
+            cursor.execute(
+                "SELECT resolve_object_tenant(%s::uuid, %s::uuid)::text",
+                (TENANT_A, "40000000-0000-0000-0000-000000000001"),
+            )
+            if cursor.fetchone()[0] != TENANT_A:
+                raise AssertionError("object tenant resolver rejected the signed tenant")
+            cursor.execute(
+                "SELECT resolve_object_tenant(%s::uuid, %s::uuid)",
+                (TENANT_B, "40000000-0000-0000-0000-000000000002"),
+            )
+            if cursor.fetchone()[0] is not None:
+                raise AssertionError("object tenant resolver trusted forged tenant GUC")
 
         cursor.execute(
             "EXPLAIN (FORMAT JSON) SELECT count(*) FROM qembed_crypto.tenant_rows"
