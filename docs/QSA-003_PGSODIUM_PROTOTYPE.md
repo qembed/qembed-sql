@@ -37,6 +37,10 @@ This is a build/API/ACL feasibility probe only. It does not validate RT-050's tr
 - No pgsodium secret-key management feature is needed for RT-050 if PostgreSQL stores only public verification keys. Do not enable or expose signing/key-generation functions to `qembed_runtime`.
 - The project must still decide whether to vendor/build the extension, use a maintained distribution package, or choose a separately audited verifier.
 
+## Additional transaction-binding constraint
+
+The RT-050 token audience must identify the exact PostgreSQL deployment/database (for example, a provisioned cluster identifier plus database OID), not merely the backend PID and transaction ID. PID and transaction identifiers are meaningful within a database cluster; they are not globally unique across independently deployed clusters. A token copied between two clusters that happen to have the same PID/XID values must still fail. Add an explicit cross-cluster replay test before treating transaction binding as complete.
+
 ## Acceptance status
 
 A green workflow is a prerequisite, not approval to adopt pgsodium. RT-050 remains proposed until the full transaction-binding and adversarial SQL prototype passes and the project owner approves the complete design.
