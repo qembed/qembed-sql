@@ -102,24 +102,24 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `IN_PROGRESS` — the threat model and signed-context architecture are accepted; Rust signed-context repository entry points are merged in `main`; the selected verifier and canonical SQL RLS migration are implemented in the PR #69 candidate branch and passed PostgreSQL 19 end-to-end validation through stacked PRs #71/#72. That candidate is not merged into `master`; independent release/security gates remain open.
+**Current status:** `IN_PROGRESS` — the threat model and signed-context architecture are accepted; Rust signed-context repository entry points are merged in `main`; the selected verifier and canonical SQL RLS migration are implemented in the PR #74 candidate branch and passed PostgreSQL 19 end-to-end validation through stacked PRs #71/#72. That candidate is not merged into `master`; independent release/security gates remain open.
 
 **Threat-model decision:** arbitrary SQL execution under `qembed_runtime` is in scope for preventing tenant, Principal and Caller identity forgery through `app.tenant_id`, `app.principal_id` and `app.caller_id`. Compromise of the trusted Rust issuer/application process and PostgreSQL superuser/host remain outside this specific control. Parameterized SQL, least-privilege roles and SECURITY DEFINER hardening remain mandatory.
 
 **Implementation evidence**
 - [PR #70](https://github.com/qembed/qembed-sql/pull/70) maps legacy GUC consumers and reproduces tenant, Principal and Caller forgery against the pre-remediation boundary. Its PostgreSQL 19 / pgvector 0.8.7 smoke run passed 442/442 because the test intentionally demonstrates the current vulnerability.
-- [PR #69](https://github.com/qembed/qembed-sql/pull/69) prototypes the minimal Ed25519 verifier, key lifecycle and transaction-bound qctx1 contract.
+- [PR #74](https://github.com/qembed/qembed-sql/pull/74) consolidates the minimal Ed25519 verifier, key lifecycle and canonical signed-context migration on a clean branch based on current `master`.
 - [Rust PR #93](https://github.com/qembed/qembed-object-runtime/pull/93) provides the Rust ContextIssuer/PostgreSQL integration foundation.
-- [SQL PR #71](https://github.com/qembed/qembed-sql/pull/71) (merged into the PR #69 candidate branch) and [Rust PR #99](https://github.com/qembed/qembed-object-runtime/pull/99) establish explicit Principal-only tokens (`caller_id: null`) versus Caller-scoped tokens, with no Principal-to-Caller inference. PR #99 is part of the RT-050 Rust integration stack; the production Rust entry points are already present in `main`.
+- [SQL PR #71](https://github.com/qembed/qembed-sql/pull/71) (merged into the PR #74 candidate branch) and [Rust PR #99](https://github.com/qembed/qembed-object-runtime/pull/99) establish explicit Principal-only tokens (`caller_id: null`) versus Caller-scoped tokens, with no Principal-to-Caller inference. PR #99 is part of the RT-050 Rust integration stack; the production Rust entry points are already present in `main`.
 - [SQL PR #72](https://github.com/qembed/qembed-sql/pull/72), merged into the PR #69 candidate branch (not `master`), migrates canonical RLS and SECURITY DEFINER identity consumers to verified qctx1 claims. PostgreSQL 19 workflow [#45061320489](https://github.com/qembed/qembed-sql/actions/runs/45061320489) passed on exact PR #72 head `e7759dd7178b9ac703414edc067601e24db18f5f` after applying the canonical clean schema, verifier fixture and migration. It proves forged tenant/Principal/Caller GUCs do not alter canonical object, episodic-memory or delegation behavior; Principal-only tokens retain tenant/semantic visibility and see no episodic rows. This is candidate-branch evidence, not merged production evidence.
 
 **Required work**
 - [x] Map every identity/security decision derived from legacy GUCs and the SQL functions that consume or set them (PR #70).
 - [x] State and approve the database threat model for arbitrary SQL execution under `qembed_runtime` (ADR RT-050).
 - [x] Demonstrate the pre-remediation exploit boundary with executable PostgreSQL tests (PR #70).
-- [x] Prototype transaction-bound Ed25519 verification, key lifecycle and the Rust ContextIssuer contract (PR #69 and Rust PR #93).
-- [x] Define Principal-only versus Caller-scoped token semantics; JSON `null` is the explicit Principal-only representation (PR #71 / Rust PR #99).
-- [x] Replace canonical SQL RLS and identified SECURITY DEFINER GUC consumers with signed-claim accessors; remove the SQL resolver's `app.caller_id` side effect (PR #72; PostgreSQL 19 workflow passed).
+- [x] Prototype transaction-bound Ed25519 verification, key lifecycle and the Rust ContextIssuer contract (PR #74 and Rust PR #93).
+- [x] Define Principal-only versus Caller-scoped token semantics; JSON `null` is the explicit Principal-only representation (SQL PR #71 / Rust PR #99; retained in candidate PR #74).
+- [x] Replace canonical SQL RLS and identified SECURITY DEFINER GUC consumers with signed-claim accessors; remove the SQL resolver's `app.caller_id` side effect (SQL PR #72; PostgreSQL 19 workflow passed; retained in candidate PR #74).
 - [x] Migrate production Rust repository transaction entry points to signed Principal-only or explicitly Caller-scoped context in the merged RT-050 Rust implementation. The legacy `begin_tenant_transaction` helper remains only for compatibility/tests and has no production source caller.
 - [x] Add inverted negative assertions in the SQL PR #72 candidate migration tests: forged legacy GUC writes have no effect on effective identity/RLS visibility in the canonical-schema PostgreSQL 19 workflow. These tests remain outside `master` until the candidate stack is integrated.
 - [ ] Verify commit, rollback, savepoint, transaction restart, pool reuse, same-backend replay, cross-backend replay, expiry and key-revocation behavior against the canonical migrated schema and actual Rust issuer.
