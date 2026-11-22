@@ -185,6 +185,13 @@ def main():
             raise AssertionError("RLS trusted a forged identity GUC instead of signed tenant claim")
 
         cursor.execute(
+            "EXPLAIN (FORMAT JSON) SELECT count(*) FROM qembed_crypto.tenant_rows"
+        )
+        rls_plan = cursor.fetchone()[0]
+        if "InitPlan" not in str(rls_plan):
+            raise AssertionError(f"RLS did not evaluate the signed context once as an InitPlan: {rls_plan}")
+
+        cursor.execute(
             "SELECT has_table_privilege(current_user, "
             "'qembed_crypto.verification_keys', 'SELECT'), "
             "has_function_privilege(current_user, "
