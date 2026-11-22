@@ -23,7 +23,7 @@ This migration is intentionally separate from the clean-install schema. It has a
 hard preflight and refuses to run until all four verifier functions exist:
 
 1. Install the `qembed_context_verify` PostgreSQL extension built from the
-   companion source in SQL PR #69.
+   companion source in SQL PR #74.
 2. Install the verification-key registry and the production `verified_context(text)`
    implementation, including the key lifecycle and role separation.
 3. Install the typed `current_*_id()` accessors.
@@ -59,7 +59,7 @@ the new policies fail closed and return no tenant rows. Do not apply it to a liv
 deployment until all repository transaction entry points use the signed-context
 API and the matching ContextIssuer is deployed.
 
-Current Rust `main` no longer uses the legacy GUC transaction bootstrap on production repository paths. `begin_tenant_transaction` remains only as a compatibility/test helper. Once this SQL migration is applied, the old GUCs must have no authorization effect. The Rust PR #93 integration tests already exercise the explicit Caller resolution contract against the prototype; the canonical-schema migration must repeat those tests and add/retain negative spoofing assertions on the production schema.
+Current Rust `main` no longer uses the legacy GUC transaction bootstrap on production repository paths. `begin_tenant_transaction` remains only as a compatibility/test helper. Once this SQL migration is applied, the old GUCs must have no authorization effect. The Rust PR #93 integration tests exercise the explicit Caller resolution contract; the candidate PR #74 includes canonical-schema migration and negative spoofing assertions validated by predecessor PR #72 workflow #45061320489. Repeat the combined suite on the clean PR #74 head and after integration into `master`.
 
 ## Validation gates still required
 
