@@ -58,7 +58,7 @@ jobs:
           docker cp tests/qembed_context_verify_transaction_probe.py qembed-pg19-minimal:/tmp/qembed_context_verify_transaction_probe.py
           docker exec --user root qembed-pg19-minimal bash -euxc '
             python3 -m venv --system-site-packages /tmp/issuer-venv
-            /tmp/issuer-venv/bin/pip install --disable-pip-version-check rfc8785
+            /tmp/issuer-venv/bin/pip install --disable-pip-version-check rfc8785==0.1.4
           '
           docker exec --user postgres qembed-pg19-minimal \
             psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qembed_context_verify_transaction_setup.sql
