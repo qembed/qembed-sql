@@ -8,7 +8,7 @@ This prototype exposes one PostgreSQL C function:
 
 `qembed_crypto.qembed_context_verify_detached(signature bytea, message bytea, public_key bytea) -> boolean`
 
-It calls libsodium `crypto_sign_verify_detached` and exposes no key-generation, signing, encryption, key-derivation, or event-trigger API. The function is immutable, strict, and parallel safe. The SQL extension revokes EXECUTE from PUBLIC; the test runtime role is not granted direct access to the low-level function.
+It calls libsodium `crypto_sign_verify_detached`, accepts only 64-byte signatures and 32-byte public keys, and rejects messages larger than 8 KiB. It exposes no key-generation, signing, encryption, key-derivation, or event-trigger API. The function is immutable, strict, and parallel safe. The SQL extension revokes EXECUTE from PUBLIC; the test runtime role is not granted direct access to the low-level function.
 
 The C module initializes libsodium when loaded by a backend. It does not require `shared_preload_libraries`, a pgsodium DDL event trigger, a getkey script, or a server root key.
 
@@ -37,4 +37,4 @@ Compare this branch with [the pgsodium prototype PR #68](https://github.com/qemb
 
 ## Validation evidence
 
-- [Minimal verifier workflow run #2](https://github.com/qembed/qembed-sql/actions/runs/45022889464) passed on the PostgreSQL 19 / pgvector 0.8.7 image using Debian Bookworm libsodium 1.0.18. The build emitted no compiler warnings in the captured job log.
+- [Minimal verifier workflow run #5](https://github.com/qembed/qembed-sql/actions/runs/45023293717) and [SQL smoke run #273](https://github.com/qembed/qembed-sql/actions/runs/45023293681) passed on the PostgreSQL 19 / pgvector 0.8.7 image using Debian Bookworm libsodium 1.0.18. The build emitted no compiler warnings in the captured job log.
