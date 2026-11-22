@@ -102,4 +102,4 @@ jobs:
         run: |
           docker exec --user postgres qembed-pg19 \
             psql -X -v ON_ERROR_STOP=1 -d postgres \
-            -c "DROP SCHEMA IF EXISTS qsa003_probe CASCADE; DROP ROLE IF EXISTS qembed_runtime;"
+            -c "DROP SCHEMA IF EXISTS qsa003_probe CASCADE; REVOKE ALL ON SCHEMA pgsodium FROM qembed_runtime; REVOKE EXECUTE ON FUNCTION pgsodium.crypto_sign_verify_detached(bytea, bytea, bytea) FROM qembed_runtime; DROP ROLE IF EXISTS qembed_runtime;"
