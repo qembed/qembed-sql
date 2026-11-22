@@ -61,7 +61,7 @@ The Rust side is no longer a Draft branch. Rust PR #93 was merged into `qembed-o
 - setting `app.principal_id` to another Principal allows the runtime role to create a delegation as that Principal;
 - setting `app.caller_id` directly switches episodic-memory visibility from Caller A to Caller B without going through the resolver.
 
-The test is wired into `tests/run_smoke.sh` after the existing tenant, delegation and Caller-memory fixtures. SQL PR #70 workflow [#45050613826](https://github.com/qembed/qembed-sql/actions/runs/45050613826) passed the full PostgreSQL 19 / pgvector 0.8.7 smoke suite: **442/442**. Its expected pass means the known weakness is reproduced and documented. After remediation, this test must be inverted into negative assertions: forged legacy GUC writes must have no effect on effective identity.
+The test is wired into `tests/run_smoke.sh` after the existing tenant, delegation and Caller-memory fixtures. SQL PR #70 current-head workflow [#45073206894](https://github.com/qembed/qembed-sql/actions/runs/45073206894) passed the full PostgreSQL 19 / pgvector 0.8.7 smoke suite after the documentation correction: **442/442**. Its expected pass means the known weakness is reproduced and documented. After remediation, this test must be inverted into negative assertions: forged legacy GUC writes must have no effect on effective identity.
 
 ## 5. Required production migration
 
@@ -79,7 +79,7 @@ The selected direction is the qctx1 signed transaction context implemented as a 
 ## 6. Current status
 
 - Source-level consumer map: completed in this PR.
-- Current-risk negative-boundary demonstration: passed SQL PR #70 PostgreSQL 19 / pgvector 0.8.7 workflow #45050465672 (442/442).
+- Current-risk negative-boundary demonstration: passed SQL PR #70 current-head PostgreSQL 19 / pgvector 0.8.7 workflow #45073206894 (442/442).
 - Signed-context direction: selected and accepted as the remediation architecture.
 - SQL verifier + lifecycle feasibility prototype: SQL PR #69, still Draft and not production-approved; exact current-head PostgreSQL 19 verifier and smoke workflows passed.
 - Rust ContextIssuer/PostgreSQL integration: Rust PR #93 merged; production repository entry points now use signed context.
