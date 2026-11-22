@@ -234,6 +234,7 @@ def main():
         })
         assert_invalid(cursor, sign, "wrong issuer", {"issuer": "urn:attacker:issuer"})
         assert_invalid(cursor, sign, "wrong version", {"version": "2"})
+        assert_invalid(cursor, sign, "invalid nonce", {"nonce": "not-a-uuid"})
         expired_now = dt.datetime.now(dt.timezone.utc)
         assert_invalid(cursor, sign, "expired token", {
             "issued_at": utc_text(expired_now - dt.timedelta(minutes=2)),
