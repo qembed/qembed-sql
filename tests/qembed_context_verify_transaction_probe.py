@@ -4,6 +4,7 @@
 import ctypes
 import ctypes.util
 import datetime as dt
+import os
 import uuid
 
 import psycopg2
@@ -19,6 +20,7 @@ TENANT_A = "10000000-0000-0000-0000-000000000001"
 TENANT_B = "10000000-0000-0000-0000-000000000002"
 PRINCIPAL = "20000000-0000-0000-0000-000000000001"
 CALLER = "30000000-0000-0000-0000-000000000001"
+CALLER_B = "30000000-0000-0000-0000-000000000002"
 
 
 def connect():
@@ -144,11 +146,16 @@ def main():
     admin = connect()
     admin.autocommit = True
     with admin.cursor() as cursor:
+        runtime_role_attributes = (
+            (False, False, False, False, False, True, False)
+            if os.environ.get("QSA003_FULL_SCHEMA") == "1"
+            else (False, False, False, False, False, False, False)
+        )
         for role_name, expected in (
             ("qembed_key_control_plane", (False, False, False, False, False, False, True)),
             ("qembed_key_registry_owner", (False, False, False, False, False, False, False)),
             ("qembed_key_audit_exporter", (False, False, False, False, False, False, True)),
-            ("qembed_runtime", (False, False, False, False, False, False, False)),
+            ("qembed_runtime", runtime_role_attributes),
         ):
             cursor.execute(
                 "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, "
@@ -349,7 +356,7 @@ def main():
             "SELECT set_config('app.tenant_id', %s, true), "
             "set_config('app.principal_id', %s, true), "
             "set_config('app.caller_id', %s, true)",
-            (TENANT_B, TENANT_B, TENANT_B),
+            (TENANT_B, TENANT_B, CALLER_B),
         )
         cursor.execute("SET ROLE qembed_runtime")
 
@@ -364,6 +371,39 @@ def main():
         if tuple(str(value) for value in cursor.fetchone()) != (TENANT_A, PRINCIPAL, CALLER):
             raise AssertionError("typed claim accessors returned incorrect signed identities")
 
+        # A valid v1 token may carry explicit JSON null for Caller. The
+        # tenant and Principal remain authenticated, while Caller-scoped access
+        # is absent rather than inferred.
+        _, _, principal_only_claims, principal_only_token = issue_token(
+            cursor, sign, {"caller_id": None}
+        )
+        if principal_only_claims["caller_id"] is not None:
+            raise AssertionError("Principal-only issuer did not encode JSON null Caller")
+        verified_principal_only = verify(cursor, principal_only_token)
+        if verified_principal_only is None or verified_principal_only.get("caller_id", "missing") is not None:
+            raise AssertionError("PostgreSQL rejected a valid Principal-only context")
+        cursor.execute(
+            "SELECT set_config('app.context_token', %s, true)",
+            (principal_only_token,),
+        )
+        cursor.execute("SELECT qembed_crypto.current_caller_id()")
+        if cursor.fetchone()[0] is not None:
+            raise AssertionError("Principal-only context must expose SQL NULL Caller")
+        cursor.execute("SELECT qembed_crypto.current_tenant_id(), qembed_crypto.current_principal_id()")
+        if tuple(str(value) for value in cursor.fetchone()) != (TENANT_A, PRINCIPAL):
+            raise AssertionError("Principal-only context lost its tenant or Principal identity")
+        if os.environ.get("QSA003_FULL_SCHEMA") == "1":
+            cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'episodic'")
+            if cursor.fetchone()[0] != 0:
+                raise AssertionError("Principal-only token exposed Caller-scoped episodic memory")
+            cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'semantic'")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("Principal-only token lost tenant-scoped semantic memory")
+            cursor.execute("SELECT count(*) FROM objects")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("Principal-only token lost tenant-scoped object visibility")
+        cursor.execute("SELECT set_config('app.context_token', %s, true)", (token,))
+
         cursor.execute(
             "SELECT count(*), bool_and(tenant_id = %s::uuid) "
             "FROM qembed_crypto.tenant_rows",
@@ -372,6 +412,62 @@ def main():
         row_count, only_signed_tenant = cursor.fetchone()
         if row_count != 5 or not only_signed_tenant:
             raise AssertionError("RLS trusted a forged identity GUC instead of signed tenant claim")
+
+        if os.environ.get("QSA003_FULL_SCHEMA") == "1":
+            cursor.execute("SELECT count(*) FROM objects")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("canonical objects RLS trusted the forged tenant GUC")
+            cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'episodic'")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("canonical episodic-memory RLS trusted the forged Caller GUC")
+            cursor.execute("SELECT count(*) FROM memories WHERE memory_kind = 'semantic'")
+            if cursor.fetchone()[0] != 1:
+                raise AssertionError("canonical semantic memory should remain tenant-scoped")
+
+            cursor.execute(
+                "SELECT caller_id::text, caller_kind FROM resolve_delegated_caller(%s::uuid, %s::uuid, %s::uuid)",
+                (TENANT_A, PRINCIPAL, CALLER),
+            )
+            if cursor.fetchone() != (CALLER, "Authenticated"):
+                raise AssertionError("explicit pre-token Caller resolver did not honor its bound identity arguments")
+
+            cursor.execute(
+                "SELECT grant_caller_delegation(%s::uuid)",
+                (CALLER_B,),
+            )
+            forged_principal_delegation = str(cursor.fetchone()[0])
+            cursor.execute(
+                "SELECT principal_id::text FROM principal_caller_delegations WHERE delegation_id = %s::uuid",
+                (forged_principal_delegation,),
+            )
+            if cursor.fetchone()[0] != PRINCIPAL:
+                raise AssertionError("delegation grant trusted forged Principal GUC instead of signed Principal claim")
+
+            cursor.execute(
+                "SELECT revoke_caller_delegation(%s::uuid)",
+                (forged_principal_delegation,),
+            )
+            if cursor.fetchone()[0] is not True:
+                raise AssertionError("signed Principal could not revoke its own delegation")
+            cursor.execute(
+                "SELECT revoked_by_principal_id::text FROM principal_caller_delegations WHERE delegation_id = %s::uuid",
+                (forged_principal_delegation,),
+            )
+            if cursor.fetchone()[0] != PRINCIPAL:
+                raise AssertionError("delegation revoke trusted forged Principal GUC")
+
+            cursor.execute(
+                "SELECT resolve_object_tenant(%s::uuid, %s::uuid)::text",
+                (TENANT_A, "40000000-0000-0000-0000-000000000001"),
+            )
+            if cursor.fetchone()[0] != TENANT_A:
+                raise AssertionError("object tenant resolver rejected the signed tenant")
+            cursor.execute(
+                "SELECT resolve_object_tenant(%s::uuid, %s::uuid)",
+                (TENANT_B, "40000000-0000-0000-0000-000000000002"),
+            )
+            if cursor.fetchone()[0] is not None:
+                raise AssertionError("object tenant resolver trusted forged tenant GUC")
 
         cursor.execute(
             "EXPLAIN (FORMAT JSON) SELECT count(*) FROM qembed_crypto.tenant_rows"
@@ -432,6 +528,8 @@ def main():
                 raise AssertionError("malformed token envelope was accepted")
         assert_invalid(cursor, sign, "malformed signed JSON", payload_override=b"not-json", signature_override=sign(b"not-json"))
         assert_invalid(cursor, sign, "unknown claim", {"unexpected_claim": "not-allowed"})
+        assert_invalid(cursor, sign, "non-string Caller claim", {"caller_id": 17})
+        assert_invalid(cursor, sign, "malformed Caller claim", {"caller_id": "not-a-uuid"})
         assert_invalid(cursor, sign, "unknown key", {"key_id": "not-registered"})
         assert_invalid(cursor, sign, "wrong backend", {"backend_pid": str(int(claims["backend_pid"]) + 1)})
         assert_invalid(cursor, sign, "wrong transaction", {"transaction_id": str(int(claims["transaction_id"]) + 1)})
@@ -520,12 +618,13 @@ def main():
         cursor.close()
         connection.close()
 
-    cleanup = connect()
-    cleanup.autocommit = True
-    with cleanup.cursor() as cursor:
-        cursor.execute("DROP SCHEMA qembed_crypto CASCADE")
-        cursor.execute("DROP ROLE qembed_runtime")
-    cleanup.close()
+    if os.environ.get("QSA003_KEEP_SCHEMA") != "1":
+        cleanup = connect()
+        cleanup.autocommit = True
+        with cleanup.cursor() as cursor:
+            cursor.execute("DROP SCHEMA qembed_crypto CASCADE")
+            cursor.execute("DROP ROLE qembed_runtime")
+        cleanup.close()
 
 
 if __name__ == "__main__":

@@ -98,24 +98,38 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Acceptance:** no covered function resolves an attacker-controlled temporary relation in place of a trusted object; catalog tests fail if a new SECURITY DEFINER function omits the required path.
 
-### QSA-003 — Document and bound the trust model for session GUC identity
+### QSA-003 — Replace caller-forgeable identity GUCs with verified transaction context
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `DOCUMENTED_RISK` — [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) explicitly states that the identity GUCs are session-settable and forgeable by arbitrary SQL under `qembed_runtime`. The project owner selected a signed transaction-context direction; a parked, unmerged design plan is recorded on branch [`architecture/rt-050-signed-transaction-context`](https://github.com/qembed/qembed-sql/tree/architecture/rt-050-signed-transaction-context) in `ADR_RT-050_Cryptographically_Verified_Transaction_Context.md`. This is a design decision only: the current GUC trust gap remains open until PostgreSQL 19 verification and the Rust/SQL contract are prototyped, tested and deployed.
+**Current status:** `IN_PROGRESS` — the threat model and signed-context architecture are accepted; the verifier and Rust issuer have PostgreSQL 19 integration coverage; the canonical SQL consumer migration now passes an end-to-end PostgreSQL 19 workflow. The remaining repository transaction migration and independent release/security gates are still open.
 
-**Reported behavior:** `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session settings writable by the runtime role. Under arbitrary SQL execution as `qembed_runtime`, a caller can forge context and bypass the intended delegation boundary, including episodic-memory isolation.
+**Threat-model decision:** arbitrary SQL execution under `qembed_runtime` is in scope for preventing tenant, Principal and Caller identity forgery through `app.tenant_id`, `app.principal_id` and `app.caller_id`. Compromise of the trusted Rust issuer/application process and PostgreSQL superuser/host remain outside this specific control. Parameterized SQL, least-privilege roles and SECURITY DEFINER hardening remain mandatory.
+
+**Implementation evidence**
+- [PR #70](https://github.com/qembed/qembed-sql/pull/70) maps legacy GUC consumers and reproduces tenant, Principal and Caller forgery against the pre-remediation boundary. Its PostgreSQL 19 / pgvector 0.8.7 smoke run passed 442/442 because the test intentionally demonstrates the current vulnerability.
+- [PR #69](https://github.com/qembed/qembed-sql/pull/69) prototypes the minimal Ed25519 verifier, key lifecycle and transaction-bound qctx1 contract.
+- [Rust PR #93](https://github.com/qembed/qembed-object-runtime/pull/93) provides the Rust ContextIssuer/PostgreSQL integration foundation.
+- [SQL PR #71](https://github.com/qembed/qembed-sql/pull/71) and [Rust PR #99](https://github.com/qembed/qembed-object-runtime/pull/99) establish explicit Principal-only tokens (`caller_id: null`) versus Caller-scoped tokens, with no Principal-to-Caller inference.
+- [SQL PR #72](https://github.com/qembed/qembed-sql/pull/72) migrates canonical RLS and SECURITY DEFINER identity consumers to verified qctx1 claims. PostgreSQL 19 workflow [#45055585669](https://github.com/qembed/qembed-sql/actions/runs/45055585669) passed after applying the canonical clean schema, verifier fixture and migration. It proves forged tenant/Principal/Caller GUCs do not alter canonical object, episodic-memory or delegation behavior; Principal-only tokens retain tenant/semantic visibility and see no episodic rows.
 
 **Required work**
-- [ ] Map every identity/security decision derived from these GUCs and every function that sets or consumes them.
-- [ ] State explicitly whether arbitrary SQL execution under `qembed_runtime` is inside or outside the database threat model.
-- [ ] Record the consequences: RLS driven by caller-writable GUCs is tenant isolation against application mistakes, not an independent boundary against SQL execution as that role.
-- [ ] Evaluate mitigations that do not silently change the Rust transaction contract (for example, narrower database roles or a trusted context-establishment boundary).
-- [ ] Add tests that demonstrate the current boundary and prevent documentation from claiming stronger isolation than is actually provided.
-- [ ] Obtain an explicit owner decision: remediation design or `ACCEPTED_RISK` with rationale.
+- [x] Map every identity/security decision derived from legacy GUCs and the SQL functions that consume or set them (PR #70).
+- [x] State and approve the database threat model for arbitrary SQL execution under `qembed_runtime` (ADR RT-050).
+- [x] Demonstrate the pre-remediation exploit boundary with executable PostgreSQL tests (PR #70).
+- [x] Prototype transaction-bound Ed25519 verification, key lifecycle and the Rust ContextIssuer contract (PR #69 and Rust PR #93).
+- [x] Define Principal-only versus Caller-scoped token semantics; JSON `null` is the explicit Principal-only representation (PR #71 / Rust PR #99).
+- [x] Replace canonical SQL RLS and identified SECURITY DEFINER GUC consumers with signed-claim accessors; remove the SQL resolver's `app.caller_id` side effect (PR #72; PostgreSQL 19 workflow passed).
+- [ ] Migrate every Rust repository transaction entry point from legacy `begin_tenant_transaction` to signed Principal-only or explicitly Caller-scoped context. Keep only narrowly justified bootstrap/pre-auth paths on legacy mechanisms.
+- [ ] Invert the PR #70 exploit demonstration into negative assertions: forged legacy GUC writes have no effect on effective identity or RLS visibility.
+- [ ] Verify commit, rollback, savepoint, transaction restart, pool reuse, same-backend replay, cross-backend replay, expiry and key-revocation behavior against the canonical migrated schema and actual Rust issuer.
+- [ ] Package the native verifier with ABI/build provenance; complete C-extension fuzzing and independent security review.
+- [ ] Define and test the supported PostgreSQL version matrix, benchmark representative RLS workloads, and validate deployment/rotation/revocation procedures.
 
-**Acceptance:** the threat model is explicit, technically accurate, and approved. This item cannot be closed merely by adding prose while product/security claims still imply GUCs are unforgeable.
+**Acceptance:** every production authorization/RLS decision uses only verified qctx1 claims; no fallback to legacy identity GUCs remains; every Rust repository transaction path establishes a signed context; adversarial tests pass as the real `qembed_runtime` role; and packaging, fuzzing, review, compatibility and deployment evidence are recorded.
 
+**QSA-003 remains `IN_PROGRESS`.** A passing canonical migration workflow is a major implementation milestone, not closure.
+  
 ### QSA-004 — Remove caller-controlled bypass of knowledge interval guards
 
 **Reported severity:** Medium  

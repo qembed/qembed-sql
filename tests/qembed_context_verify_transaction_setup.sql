@@ -795,7 +795,7 @@ BEGIN
   END IF;
 
   FOREACH v_required_claim IN ARRAY ARRAY[
-    'version', 'tenant_id', 'principal_id', 'caller_id', 'backend_pid',
+    'version', 'tenant_id', 'principal_id', 'backend_pid',
     'transaction_id', 'database_oid', 'deployment_id', 'issuer', 'audience',
     'key_id', 'issued_at', 'expires_at', 'nonce'
   ] LOOP
@@ -804,10 +804,18 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- caller_id is present in every v1 token, but JSON null denotes a
+  -- Principal-only context. A string denotes an explicitly resolved Caller.
+  IF NOT (v_claims ? 'caller_id')
+     OR jsonb_typeof(v_claims->'caller_id') NOT IN ('string', 'null') THEN
+    RETURN NULL;
+  END IF;
+
   IF v_claims->>'version' <> '1'
      OR v_claims->>'tenant_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      OR v_claims->>'principal_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-     OR v_claims->>'caller_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     OR (jsonb_typeof(v_claims->'caller_id') = 'string'
+         AND v_claims->>'caller_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
      OR v_claims->>'nonce' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      OR v_claims->>'key_id' IS DISTINCT FROM v_key.key_id THEN
     RETURN NULL;
@@ -959,3 +967,15 @@ ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
 CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
   USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
 GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+ 
+-- Caller-scoped rows model episodic-memory visibility. A Principal-only token
+-- must not acquire Caller visibility through a fallback.
+CREATE TABLE qembed_crypto.caller_rows (
+  caller_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+ALTER TABLE qembed_crypto.caller_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.caller_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_caller_policy ON qembed_crypto.caller_rows
+  USING (caller_id = (SELECT qembed_crypto.current_caller_id()));
+GRANT SELECT ON qembed_crypto.caller_rows TO qembed_runtime;
