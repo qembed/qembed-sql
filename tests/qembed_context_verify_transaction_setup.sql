@@ -3,17 +3,17 @@
 -- The wire format matches qembed-store: qctx1:<payload-hex>:<signature-hex>.
 
 DO $roles$ BEGIN
-  CREATE ROLE qembed_runtime NOLOGIN;
+  CREATE ROLE qembed_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $roles$;
 
 DO $roles$ BEGIN
-  CREATE ROLE qembed_key_registry_owner NOLOGIN;
+  CREATE ROLE qembed_key_registry_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $roles$;
 
 DO $roles$ BEGIN
-  CREATE ROLE qembed_key_control_plane LOGIN NOINHERIT;
+  CREATE ROLE qembed_key_control_plane LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $roles$;
 
