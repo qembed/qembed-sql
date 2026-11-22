@@ -13,6 +13,7 @@ from psycopg2 import Binary
 ISSUER = "urn:qembed:context-issuer:probe"
 DEPLOYMENT = "probe-deployment-1"
 KEY_ID = "external-test-key-1"
+STAGED_KEY_ID = "external-staged-key"
 AUDIENCE_PREFIX = "urn:qembed:postgres:deployment:"
 TENANT_A = "10000000-0000-0000-0000-000000000001"
 TENANT_B = "10000000-0000-0000-0000-000000000002"
@@ -146,11 +147,50 @@ def main():
         cursor.execute("SELECT oid::text FROM pg_database WHERE datname = current_database()")
         database_oid = cursor.fetchone()[0]
         audience = f"{AUDIENCE_PREFIX}{DEPLOYMENT}:database:{database_oid}"
+
+        cursor.execute("SET SESSION AUTHORIZATION qembed_key_control_plane")
         cursor.execute(
-            "INSERT INTO qembed_crypto.verification_keys "
-            "(key_id, public_key, issuer, audience, deployment_id) VALUES (%s, %s, %s, %s, %s)",
-            (KEY_ID, Binary(public_key), ISSUER, audience, DEPLOYMENT),
+            "SELECT has_table_privilege(current_user, "
+            "'qembed_crypto.verification_keys', 'SELECT'), "
+            "has_table_privilege(current_user, "
+            "'qembed_crypto.verification_keys', 'INSERT'), "
+            "has_table_privilege(current_user, "
+            "'qembed_crypto.key_lifecycle_audit', 'SELECT'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.stage_verification_key(text,bytea,text,text,text,text,uuid,text)', 'EXECUTE')"
         )
+        can_read_keys, can_insert_keys, can_read_audit, can_stage = cursor.fetchone()
+        if can_read_keys or can_insert_keys or can_read_audit or not can_stage:
+            raise AssertionError("control plane must use narrow management functions, not direct table access")
+
+        for staged_key_id in (KEY_ID, STAGED_KEY_ID):
+            cursor.execute(
+                "SELECT qembed_crypto.stage_verification_key(%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    staged_key_id, Binary(public_key), ISSUER, audience, DEPLOYMENT,
+                    "operator:test-operator", str(uuid.uuid4()), "test-only key staging",
+                ),
+            )
+
+        try:
+            cursor.execute(
+                "INSERT INTO qembed_crypto.verification_keys "
+                "(key_id, public_key, issuer, audience, deployment_id) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                ("forbidden-direct-insert", Binary(public_key), ISSUER, audience, DEPLOYMENT),
+            )
+            raise AssertionError("control plane must not insert directly into the key registry")
+        except psycopg2.errors.InsufficientPrivilege:
+            pass
+
+        cursor.execute(
+            "SELECT qembed_crypto.activate_verification_key(%s, %s, %s, %s, %s)",
+            (
+                KEY_ID, "operator:test-operator", "approver:test-approver",
+                str(uuid.uuid4()), "test-only key activation",
+            ),
+        )
+        cursor.execute("RESET SESSION AUTHORIZATION")
     admin.close()
 
     connection = connect()
@@ -168,6 +208,8 @@ def main():
 
         if verify(cursor, token) != claims:
             raise AssertionError("valid RFC 8785/JCS token was not accepted")
+
+        assert_invalid(cursor, sign, "staged key", overrides={"key_id": STAGED_KEY_ID})
         cursor.execute(
             "SELECT qembed_crypto.current_tenant_id(), "
             "qembed_crypto.current_principal_id(), qembed_crypto.current_caller_id()"
@@ -194,12 +236,22 @@ def main():
         cursor.execute(
             "SELECT has_table_privilege(current_user, "
             "'qembed_crypto.verification_keys', 'SELECT'), "
+            "has_table_privilege(current_user, "
+            "'qembed_crypto.key_lifecycle_audit', 'SELECT'), "
             "has_function_privilege(current_user, "
-            "'qembed_crypto.qembed_context_verify_detached(bytea,bytea,bytea)', 'EXECUTE')"
+            "'qembed_crypto.qembed_context_verify_detached(bytea,bytea,bytea)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.stage_verification_key(text,bytea,text,text,text,text,uuid,text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.activate_verification_key(text,text,text,uuid,text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.retire_verification_key(text,interval,text,text,uuid,text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.revoke_verification_key(text,text,uuid,text)', 'EXECUTE')"
         )
-        can_read_keys, can_call_low_level = cursor.fetchone()
-        if can_read_keys or can_call_low_level:
-            raise AssertionError("runtime can read verification keys or invoke low-level C verifier")
+        privileges = cursor.fetchone()
+        if any(privileges):
+            raise AssertionError("runtime has key registry, audit, low-level verifier or key-management privileges")
 
         tampered = bytearray(signature)
         tampered[0] ^= 1
