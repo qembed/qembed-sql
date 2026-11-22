@@ -1,0 +1,69 @@
+name: QSA-003 minimal Ed25519 verifier PostgreSQL 19 prototype
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - ".github/workflows/minimal-verifier-prototype.yml"
+      - "extensions/qembed_context_verify/**"
+      - "tests/qembed_context_verify_pg19_probe.sql"
+      - "tests/qembed_context_verify_transaction_setup.sql"
+      - "tests/qembed_context_verify_transaction_probe.py"
+      - "docs/QSA-003_MINIMAL_VERIFIER_PROTOTYPE.md"
+  workflow_dispatch:
+
+jobs:
+  minimal-verifier-pg19:
+    name: Build minimal Ed25519 verifier on PostgreSQL 19
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start PostgreSQL 19
+        run: |
+          docker run --detach --name qembed-pg19-minimal \
+            --publish 5432:5432 \
+            --env POSTGRES_PASSWORD=postgres \
+            pgvector/pgvector:0.8.7-pg19-bookworm
+          for attempt in $(seq 1 60); do
+            if docker exec qembed-pg19-minimal pg_isready -U postgres -d postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs qembed-pg19-minimal
+          exit 1
+      - name: Build against distribution libsodium and PostgreSQL 19
+        run: |
+          docker exec --user root qembed-pg19-minimal bash -euxc '
+            apt-get update
+            apt-get install -y --no-install-recommends build-essential pkg-config libsodium-dev postgresql-server-dev-19 python3 python3-psycopg2 python3-venv
+            test "$(pg_config --version | awk "{print \$2}")" = "19.0"
+            pkg-config --modversion libsodium
+          '
+          docker cp extensions/qembed_context_verify qembed-pg19-minimal:/tmp/qembed_context_verify
+          docker exec --user root qembed-pg19-minimal bash -euxc '
+            make -C /tmp/qembed_context_verify PG_CONFIG="$(command -v pg_config)"
+            ldd /tmp/qembed_context_verify/qembed_context_verify.so | grep "libsodium.so.23"
+            make -C /tmp/qembed_context_verify PG_CONFIG="$(command -v pg_config)" install
+          '
+      - name: Verify RFC 8032 vector, least privilege and RLS InitPlan
+        run: |
+          docker cp tests/qembed_context_verify_pg19_probe.sql qembed-pg19-minimal:/tmp/qembed_context_verify_pg19_probe.sql
+          docker exec --user postgres qembed-pg19-minimal \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qembed_context_verify_pg19_probe.sql
+      - name: Verify full transaction-bound context with JCS issuer
+        run: |
+          docker cp tests/qembed_context_verify_transaction_setup.sql qembed-pg19-minimal:/tmp/qembed_context_verify_transaction_setup.sql
+          docker cp tests/qembed_context_verify_transaction_probe.py qembed-pg19-minimal:/tmp/qembed_context_verify_transaction_probe.py
+          docker exec --user root qembed-pg19-minimal bash -euxc '
+            python3 -m venv --system-site-packages /tmp/issuer-venv
+            /tmp/issuer-venv/bin/pip install --disable-pip-version-check rfc8785
+          '
+          docker exec --user postgres qembed-pg19-minimal \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qembed_context_verify_transaction_setup.sql
+          docker exec --user postgres qembed-pg19-minimal \
+            /tmp/issuer-venv/bin/python /tmp/qembed_context_verify_transaction_probe.py
+      - name: Remove PostgreSQL container
+        if: always()
+        run: docker rm -f qembed-pg19-minimal || true
