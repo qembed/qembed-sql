@@ -22,7 +22,7 @@ The build downloads pgsodium from exact source commit `a8b8a2739bab1f7a07445b1c9
 
 The dedicated workflow builds the pinned pgsodium 3.1.11 source against PostgreSQL 19 server headers in the PostgreSQL 19 / pgvector 0.8.7 image. It builds libsodium 1.0.22, verifies the pgsodium link resolves `libsodium.so.26`, and then configures pgsodium in `shared_preload_libraries`.
 
-The preload is necessary for pgsodium to define `pgsodium.enable_event_trigger`; without it, pgsodium's DDL event trigger fails during later table creation because the setting is unknown. Preload also requires a getkey script and loads a root key into PostgreSQL server memory. CI uses `tests/pgsodium_getkey_test.sh` to create an ephemeral key inside the disposable container. This is a test fixture, not a production key-management recommendation.
+The preload is necessary for pgsodium to define `pgsodium.enable_event_trigger`; without it, pgsodium's DDL event trigger fails during later table creation because the setting is unknown. Preload also requires a getkey script and loads a root key into PostgreSQL server memory. CI uses `tests/pgsodium_getkey_test.sh` to return a fresh random 32-byte root key at startup without persisting it. This is safe for this probe only because it does not use pgsodium server-managed key derivation or key-ID APIs; it is a test fixture, not a production key-management recommendation.
 
 The workflow then:
 1. installs and creates the extension;
