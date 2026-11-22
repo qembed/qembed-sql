@@ -64,6 +64,14 @@ SELECT tt.chk('AUDIT-006 pre-auth owner grants remain column-limited',
 SET ROLE qembed_runtime;
 SELECT set_config('app.tenant_id','aaaaaaaa-0000-0000-0000-000000000001',false);
 
+-- QSA-003 risk demonstration: qembed_runtime can replace the tenant identity GUC itself.
+-- This is not an authorization boundary; it documents why arbitrary SQL under this role
+-- can impersonate another tenant until RT-050 is implemented.
+SELECT set_config('app.tenant_id','bbbbbbbb-0000-0000-0000-000000000002',false);
+SELECT tt.chk('QSA-003 runtime can forge tenant GUC and read Tenant B object',
+ $q$SELECT count(*)=1 FROM objects WHERE object_id='bb000000-0000-0000-0000-000000000001'$q$);
+SELECT set_config('app.tenant_id','aaaaaaaa-0000-0000-0000-000000000001',false);
+
 -- Tenant A must not see the seeded tenant B rows in any Rust-backed table.
 SELECT tt.chk('AUDIT-006 A cannot see B object', $q$SELECT count(*)=0 FROM objects WHERE tenant_id='bbbbbbbb-0000-0000-0000-000000000002'$q$);
 SELECT tt.chk('AUDIT-006 A cannot see B object_version', $q$SELECT count(*)=0 FROM object_versions WHERE tenant_id='bbbbbbbb-0000-0000-0000-000000000002'$q$);
