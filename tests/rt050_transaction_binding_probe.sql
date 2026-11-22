@@ -225,7 +225,7 @@ SELECT set_config('qsa003.rollback_payload', :'rollback_payload_hex', false);
 SELECT set_config('qsa003.rollback_signature', :'rollback_signature_hex', false);
 BEGIN;
 SET ROLE qembed_runtime;
-DO $
+DO $rb$
 BEGIN
   IF qsa003_probe.verified_context(
     decode(current_setting('qsa003.rollback_payload'), 'hex'),
@@ -234,7 +234,7 @@ BEGIN
     RAISE EXCEPTION 'rolled-back transaction token replayed in a later transaction';
   END IF;
 END
-$;
+$rb$;
 RESET ROLE;
 COMMIT;
 RESET qsa003.rollback_payload;
