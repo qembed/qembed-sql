@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """External JCS/Ed25519 issuer probe for the qctx1 PostgreSQL token contract."""
 
-import base64
 import ctypes
 import ctypes.util
 import datetime as dt
@@ -205,7 +204,8 @@ def main():
             cursor, sign, "modified payload",
             payload_override=payload + b" ", signature_override=signature
         )
-        assert_invalid(cursor, sign, "unknown envelope version", payload_override=b"{}", signature_override=signature)
+        if verify(cursor, token.replace("qctx1:", "qctx2:", 1)) is not None:
+            raise AssertionError("unknown envelope version was accepted")
         assert_invalid(cursor, sign, "wrong backend", {"backend_pid": str(int(claims["backend_pid"]) + 1)})
         assert_invalid(cursor, sign, "wrong transaction", {"transaction_id": str(int(claims["transaction_id"]) + 1)})
         assert_invalid(cursor, sign, "wrong database", {"database_oid": str(int(database_oid) + 1)})
@@ -247,7 +247,7 @@ def main():
         connection.commit()
 
         # A token from a rolled-back transaction must fail in the following transaction.
-        rollback_payload, rollback_signature, rollback_claims, rollback_token = issue_token(cursor, sign)
+        _, _, rollback_claims, rollback_token = issue_token(cursor, sign)
         cursor.execute("SELECT set_config('app.context_token', %s, true)", (rollback_token,))
         cursor.execute("SET ROLE qembed_runtime")
         if verify(cursor, rollback_token) != rollback_claims:
