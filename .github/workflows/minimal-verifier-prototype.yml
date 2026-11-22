@@ -7,6 +7,8 @@ on:
       - ".github/workflows/minimal-verifier-prototype.yml"
       - "extensions/qembed_context_verify/**"
       - "tests/qembed_context_verify_pg19_probe.sql"
+      - "tests/qembed_context_verify_transaction_setup.sql"
+      - "tests/qembed_context_verify_transaction_probe.py"
       - "docs/QSA-003_MINIMAL_VERIFIER_PROTOTYPE.md"
   workflow_dispatch:
 
@@ -35,7 +37,7 @@ jobs:
         run: |
           docker exec --user root qembed-pg19-minimal bash -euxc '
             apt-get update
-            apt-get install -y --no-install-recommends build-essential pkg-config libsodium-dev postgresql-server-dev-19
+            apt-get install -y --no-install-recommends build-essential pkg-config libsodium-dev postgresql-server-dev-19 python3 python3-psycopg2
             test "$(pg_config --version | awk "{print \$2}")" = "19.0"
             pkg-config --modversion libsodium
           '
@@ -50,6 +52,14 @@ jobs:
           docker cp tests/qembed_context_verify_pg19_probe.sql qembed-pg19-minimal:/tmp/qembed_context_verify_pg19_probe.sql
           docker exec --user postgres qembed-pg19-minimal \
             psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qembed_context_verify_pg19_probe.sql
+      - name: Verify full transaction-bound context with external issuer
+        run: |
+          docker cp tests/qembed_context_verify_transaction_setup.sql qembed-pg19-minimal:/tmp/qembed_context_verify_transaction_setup.sql
+          docker cp tests/qembed_context_verify_transaction_probe.py qembed-pg19-minimal:/tmp/qembed_context_verify_transaction_probe.py
+          docker exec --user postgres qembed-pg19-minimal \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qembed_context_verify_transaction_setup.sql
+          docker exec --user postgres qembed-pg19-minimal \
+            python3 /tmp/qembed_context_verify_transaction_probe.py
       - name: Remove PostgreSQL container
         if: always()
         run: docker rm -f qembed-pg19-minimal || true
