@@ -147,6 +147,7 @@ def main():
         for role_name, expected in (
             ("qembed_key_control_plane", (False, False, False, False, False, False, True)),
             ("qembed_key_registry_owner", (False, False, False, False, False, False, False)),
+            ("qembed_key_audit_exporter", (False, False, False, False, False, False, True)),
             ("qembed_runtime", (False, False, False, False, False, False, False)),
         ):
             cursor.execute(
@@ -174,7 +175,13 @@ def main():
             "has_function_privilege(current_user, "
             "'qembed_crypto.list_verification_keys(text)', 'EXECUTE'), "
             "has_function_privilege(current_user, "
-            "'qembed_crypto.get_key_lifecycle_operation(uuid)', 'EXECUTE')"
+            "'qembed_crypto.get_key_lifecycle_operation(uuid)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.list_pending_key_audit_exports(integer)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.mark_key_audit_exported(bigint,text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.record_key_audit_export_failure(bigint,text)', 'EXECUTE')"
         )
         can_read_keys, can_insert_keys, can_read_audit, can_stage, can_list, can_read_operation = cursor.fetchone()
         if can_read_keys or can_insert_keys or can_read_audit or not can_stage or not can_list or not can_read_operation:
@@ -253,11 +260,12 @@ def main():
         if {row[0]: row[1] for row in key_rows} != {KEY_ID: "active", STAGED_KEY_ID: "staged"}:
             raise AssertionError("control-plane metadata reader returned incorrect key states")
         cursor.execute(
-            "SELECT operation, new_state FROM qembed_crypto.get_key_lifecycle_operation(%s)",
+            "SELECT operation, new_state, audit_export_status "
+            "FROM qembed_crypto.get_key_lifecycle_operation(%s)",
             (primary_stage_request_id,),
         )
-        if cursor.fetchone() != ("stage", "staged"):
-            raise AssertionError("control-plane audit reader returned incorrect lifecycle evidence")
+        if cursor.fetchone() != ("stage", "staged", "pending"):
+            raise AssertionError("control-plane audit reader returned incorrect lifecycle/export evidence")
         cursor.execute("RESET SESSION AUTHORIZATION")
         cursor.execute(
             "SELECT event_id FROM qembed_crypto.key_lifecycle_audit ORDER BY event_id LIMIT 1"
@@ -275,6 +283,68 @@ def main():
         except psycopg2.errors.RaiseException:
             pass
     admin.close()
+
+    exporter = connect()
+    exporter.autocommit = True
+    with exporter.cursor() as cursor:
+        cursor.execute("SET SESSION AUTHORIZATION qembed_key_audit_exporter")
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'qembed_crypto.key_lifecycle_audit', 'SELECT'), "
+            "has_table_privilege(current_user, "
+            "'qembed_crypto.key_lifecycle_audit_outbox', 'SELECT'), "
+            "has_table_privilege(current_user, "
+            "'qembed_crypto.key_lifecycle_audit_outbox', 'UPDATE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.list_pending_key_audit_exports(integer)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.mark_key_audit_exported(bigint,text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.record_key_audit_export_failure(bigint,text)', 'EXECUTE')"
+        )
+        can_read_audit, can_read_outbox, can_update_outbox, can_list, can_mark, can_record_failure = cursor.fetchone()
+        if can_read_audit or can_read_outbox or can_update_outbox or not can_list or not can_mark or not can_record_failure:
+            raise AssertionError("audit exporter must use only its restricted outbox functions")
+
+        cursor.execute(
+            "SELECT event_id, request_id, operation "
+            "FROM qembed_crypto.list_pending_key_audit_exports(%s)",
+            (100,),
+        )
+        pending = cursor.fetchall()
+        if len(pending) != 3:
+            raise AssertionError(f"expected three transactional audit outbox events, got {len(pending)}")
+
+        delivered_event_id = pending[0][0]
+        cursor.execute(
+            "SELECT qembed_crypto.mark_key_audit_exported(%s, %s)",
+            (delivered_event_id, "test-sink-receipt-1"),
+        )
+        delivered_at = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT qembed_crypto.mark_key_audit_exported(%s, %s)",
+            (delivered_event_id, "test-sink-receipt-1"),
+        )
+        if cursor.fetchone()[0] != delivered_at:
+            raise AssertionError("audit export acknowledgement must be idempotent")
+
+        failed_event_id = pending[1][0]
+        cursor.execute(
+            "SELECT qembed_crypto.record_key_audit_export_failure(%s, %s)",
+            (failed_event_id, "temporary test sink outage"),
+        )
+        if cursor.fetchone()[0] != 1:
+            raise AssertionError("audit export failure should increment the retry counter")
+
+        cursor.execute(
+            "SELECT event_id, attempt_count FROM qembed_crypto.list_pending_key_audit_exports(%s)",
+            (100,),
+        )
+        pending_after_delivery = cursor.fetchall()
+        if len(pending_after_delivery) != 2 or (failed_event_id, 1) not in pending_after_delivery:
+            raise AssertionError("outbox should retain failed delivery for retry and hide acknowledged event")
+        cursor.execute("RESET SESSION AUTHORIZATION")
+    exporter.close()
 
     connection = connect()
     cursor = connection.cursor()
