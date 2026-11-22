@@ -795,7 +795,7 @@ BEGIN
   END IF;
 
   FOREACH v_required_claim IN ARRAY ARRAY[
-    'version', 'tenant_id', 'principal_id', 'caller_id', 'backend_pid',
+    'version', 'tenant_id', 'principal_id', 'backend_pid',
     'transaction_id', 'database_oid', 'deployment_id', 'issuer', 'audience',
     'key_id', 'issued_at', 'expires_at', 'nonce'
   ] LOOP
@@ -804,11 +804,611 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- caller_id is present in every v1 token, but JSON null denotes a
+  -- Principal-only context. A string denotes an explicitly resolved Caller.
+  IF NOT (v_claims ? 'caller_id')
+     OR jsonb_typeof(v_claims->'caller_id') NOT IN ('string', 'null') THEN
+    RETURN NULL;
+  END IF;
+
   IF v_claims->>'version' <> '1'
-     OR v_claims->>'tenant_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-     OR v_claims->>'principal_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-     OR v_claims->>'caller_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-     OR v_claims->>'nonce' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     OR v_claims->>'tenant_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  -- Active keys may verify tokens issued after activation. Retired keys are
+  -- verification-only until the grace deadline, and only for tokens issued
+  -- before retirement whose full lifetime fits inside that deadline.
+  -- Revocation is immediate and invalidates even otherwise-live tokens.
+  IF v_key.status IN ('staged', 'revoked')
+     OR (v_key.status = 'active' AND v_issued_at < v_key.activated_at)
+     OR (v_key.status = 'retired' AND (
+       v_issued_at > v_key.retired_at
+       OR v_now >= v_key.verify_until
+       OR v_expires_at > v_key.verify_until
+     )) THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+-- Transfer registry and SECURITY DEFINER ownership to a dedicated NOLOGIN role.
+ALTER TABLE qembed_crypto.verification_keys OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit_outbox OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_verification_key_lifecycle() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.prevent_key_audit_mutation() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_key_audit_outbox() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_verification_keys(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_pending_key_audit_exports(integer) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.verified_context(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_tenant_id() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_principal_id() OWNER TO qembed_key_registry_owner;
+
+ALTER FUNCTION qembed_crypto.current_caller_id() OWNER TO qembed_key_registry_owner;
+
+-- The registry owner is the only principal allowed to invoke the low-level C verifier.
+GRANT EXECUTE ON FUNCTION qembed_crypto.qembed_context_verify_detached(bytea, bytea, bytea)
+  TO qembed_key_registry_owner;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA qembed_crypto FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_verification_keys(text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_pending_key_audit_exports(integer)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text)
+  TO qembed_key_audit_exporter;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
+     OR v_claims->>'principal_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  -- Active keys may verify tokens issued after activation. Retired keys are
+  -- verification-only until the grace deadline, and only for tokens issued
+  -- before retirement whose full lifetime fits inside that deadline.
+  -- Revocation is immediate and invalidates even otherwise-live tokens.
+  IF v_key.status IN ('staged', 'revoked')
+     OR (v_key.status = 'active' AND v_issued_at < v_key.activated_at)
+     OR (v_key.status = 'retired' AND (
+       v_issued_at > v_key.retired_at
+       OR v_now >= v_key.verify_until
+       OR v_expires_at > v_key.verify_until
+     )) THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+-- Transfer registry and SECURITY DEFINER ownership to a dedicated NOLOGIN role.
+ALTER TABLE qembed_crypto.verification_keys OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit_outbox OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_verification_key_lifecycle() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.prevent_key_audit_mutation() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_key_audit_outbox() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_verification_keys(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_pending_key_audit_exports(integer) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.verified_context(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_tenant_id() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_principal_id() OWNER TO qembed_key_registry_owner;
+
+ALTER FUNCTION qembed_crypto.current_caller_id() OWNER TO qembed_key_registry_owner;
+
+-- The registry owner is the only principal allowed to invoke the low-level C verifier.
+GRANT EXECUTE ON FUNCTION qembed_crypto.qembed_context_verify_detached(bytea, bytea, bytea)
+  TO qembed_key_registry_owner;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA qembed_crypto FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_verification_keys(text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_pending_key_audit_exports(integer)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text)
+  TO qembed_key_audit_exporter;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
+     OR (jsonb_typeof(v_claims->'caller_id') = 'string'
+         AND v_claims->>'caller_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  -- Active keys may verify tokens issued after activation. Retired keys are
+  -- verification-only until the grace deadline, and only for tokens issued
+  -- before retirement whose full lifetime fits inside that deadline.
+  -- Revocation is immediate and invalidates even otherwise-live tokens.
+  IF v_key.status IN ('staged', 'revoked')
+     OR (v_key.status = 'active' AND v_issued_at < v_key.activated_at)
+     OR (v_key.status = 'retired' AND (
+       v_issued_at > v_key.retired_at
+       OR v_now >= v_key.verify_until
+       OR v_expires_at > v_key.verify_until
+     )) THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+-- Transfer registry and SECURITY DEFINER ownership to a dedicated NOLOGIN role.
+ALTER TABLE qembed_crypto.verification_keys OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit_outbox OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_verification_key_lifecycle() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.prevent_key_audit_mutation() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_key_audit_outbox() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_verification_keys(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_pending_key_audit_exports(integer) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.verified_context(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_tenant_id() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_principal_id() OWNER TO qembed_key_registry_owner;
+
+ALTER FUNCTION qembed_crypto.current_caller_id() OWNER TO qembed_key_registry_owner;
+
+-- The registry owner is the only principal allowed to invoke the low-level C verifier.
+GRANT EXECUTE ON FUNCTION qembed_crypto.qembed_context_verify_detached(bytea, bytea, bytea)
+  TO qembed_key_registry_owner;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA qembed_crypto FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_verification_keys(text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_pending_key_audit_exports(integer)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text)
+  TO qembed_key_audit_exporter;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+)
+     OR v_claims->>'nonce' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  -- Active keys may verify tokens issued after activation. Retired keys are
+  -- verification-only until the grace deadline, and only for tokens issued
+  -- before retirement whose full lifetime fits inside that deadline.
+  -- Revocation is immediate and invalidates even otherwise-live tokens.
+  IF v_key.status IN ('staged', 'revoked')
+     OR (v_key.status = 'active' AND v_issued_at < v_key.activated_at)
+     OR (v_key.status = 'retired' AND (
+       v_issued_at > v_key.retired_at
+       OR v_now >= v_key.verify_until
+       OR v_expires_at > v_key.verify_until
+     )) THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+-- Transfer registry and SECURITY DEFINER ownership to a dedicated NOLOGIN role.
+ALTER TABLE qembed_crypto.verification_keys OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit_outbox OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_verification_key_lifecycle() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.prevent_key_audit_mutation() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_key_audit_outbox() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_verification_keys(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_pending_key_audit_exports(integer) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.verified_context(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_tenant_id() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_principal_id() OWNER TO qembed_key_registry_owner;
+
+ALTER FUNCTION qembed_crypto.current_caller_id() OWNER TO qembed_key_registry_owner;
+
+-- The registry owner is the only principal allowed to invoke the low-level C verifier.
+GRANT EXECUTE ON FUNCTION qembed_crypto.qembed_context_verify_detached(bytea, bytea, bytea)
+  TO qembed_key_registry_owner;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA qembed_crypto FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_verification_keys(text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_pending_key_audit_exports(integer)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text)
+  TO qembed_key_audit_exporter;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
      OR v_claims->>'key_id' IS DISTINCT FROM v_key.key_id THEN
     RETURN NULL;
   END IF;
