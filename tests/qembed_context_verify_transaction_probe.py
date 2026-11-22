@@ -144,6 +144,19 @@ def main():
     admin = connect()
     admin.autocommit = True
     with admin.cursor() as cursor:
+        for role_name, expected in (
+            ("qembed_key_control_plane", (False, False, False, False, False, False, True)),
+            ("qembed_key_registry_owner", (False, False, False, False, False, False, False)),
+            ("qembed_runtime", (False, False, False, False, False, False, False)),
+        ):
+            cursor.execute(
+                "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, "
+                "rolbypassrls, rolinherit, rolcanlogin FROM pg_roles WHERE rolname = %s",
+                (role_name,),
+            )
+            if cursor.fetchone() != expected:
+                raise AssertionError(f"database role {role_name} has unsafe attributes")
+
         cursor.execute("SELECT oid::text FROM pg_database WHERE datname = current_database()")
         database_oid = cursor.fetchone()[0]
         audience = f"{AUDIENCE_PREFIX}{DEPLOYMENT}:database:{database_oid}"
