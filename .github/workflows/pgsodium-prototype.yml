@@ -43,11 +43,12 @@ jobs:
             apt-get install -y --no-install-recommends build-essential ca-certificates libsodium-dev postgresql-server-dev-19 curl unzip
             test "$(pg_config --version | awk "{print \$2}")" = "19.0"
             curl --fail --location --retry 3 \
-              https://api.pgxn.org/dist/pgsodium-3.1.11.zip \
-              --output /tmp/pgsodium-3.1.11.zip
-            unzip -q /tmp/pgsodium-3.1.11.zip -d /tmp
-            make -C /tmp/pgsodium-3.1.11 PG_CONFIG="$(command -v pg_config)"
-            make -C /tmp/pgsodium-3.1.11 PG_CONFIG="$(command -v pg_config)" install
+              https://codeload.github.com/michelp/pgsodium/tar.gz/a8b8a2739bab1f7a07445b1c911e2bd1abf67784 \
+              --output /tmp/pgsodium-3.1.11.tar.gz
+            mkdir -p /tmp/pgsodium-src
+            tar -xzf /tmp/pgsodium-3.1.11.tar.gz --strip-components=1 -C /tmp/pgsodium-src
+            make -C /tmp/pgsodium-src PG_CONFIG="$(command -v pg_config)"
+            make -C /tmp/pgsodium-src PG_CONFIG="$(command -v pg_config)" install
           '
       - name: Verify Ed25519 API and least-privilege execution
         run: |
