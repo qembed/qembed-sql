@@ -173,6 +173,24 @@ BEGIN
   END IF;
 END
 $$;
+-- A savepoint rollback does not end the outer transaction. The token
+-- remains valid for that same transaction and its signed Caller is unchanged.
+SAVEPOINT rt050_context_savepoint;
+SELECT set_config('app.caller_id', 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', true);
+ROLLBACK TO SAVEPOINT rt050_context_savepoint;
+DO $sp$
+DECLARE
+  v_token record;
+  v_expected jsonb;
+BEGIN
+  SELECT * INTO STRICT v_token FROM qsa003_probe.probe_tokens WHERE test_case = 'valid';
+  SELECT claims INTO STRICT v_expected FROM pg_temp.qsa003_expected;
+  IF qsa003_probe.verified_context(v_token.payload, v_token.signature)
+       IS DISTINCT FROM v_expected THEN
+    RAISE EXCEPTION 'savepoint rollback invalidated or altered the outer transaction context';
+  END IF;
+END
+$sp$;
 RESET ROLE;
 COMMIT;
 
