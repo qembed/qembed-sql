@@ -172,6 +172,63 @@ CREATE TRIGGER key_lifecycle_audit_append_only
 BEFORE UPDATE OR DELETE ON qembed_crypto.key_lifecycle_audit
 FOR EACH ROW EXECUTE FUNCTION qembed_crypto.prevent_key_audit_mutation();
 
+CREATE FUNCTION qembed_crypto.guard_key_audit_outbox()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $outbox_guard$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'key audit outbox rows are retained for delivery evidence';
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.delivery_status <> 'pending'
+       OR NEW.delivered_at IS NOT NULL
+       OR NEW.sink_receipt IS NOT NULL
+       OR NEW.attempt_count <> 0
+       OR NEW.last_attempt_at IS NOT NULL
+       OR NEW.last_error IS NOT NULL THEN
+      RAISE EXCEPTION 'new audit outbox rows must start pending and untouched';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF NEW.event_id IS DISTINCT FROM OLD.event_id
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+    RAISE EXCEPTION 'audit outbox event identity is immutable';
+  END IF;
+
+  IF OLD.delivery_status = 'delivered' THEN
+    RAISE EXCEPTION 'delivered audit outbox rows are immutable';
+  ELSIF OLD.delivery_status = 'pending' AND NEW.delivery_status = 'pending' THEN
+    IF NEW.attempt_count <> OLD.attempt_count + 1
+       OR NEW.last_attempt_at IS NULL
+       OR NEW.last_error IS NULL
+       OR NEW.delivered_at IS NOT NULL
+       OR NEW.sink_receipt IS NOT NULL THEN
+      RAISE EXCEPTION 'pending audit export updates must record one failed attempt';
+    END IF;
+  ELSIF OLD.delivery_status = 'pending' AND NEW.delivery_status = 'delivered' THEN
+    IF NEW.attempt_count IS DISTINCT FROM OLD.attempt_count
+       OR NEW.delivered_at IS NULL
+       OR NEW.sink_receipt IS NULL
+       OR NEW.last_attempt_at IS DISTINCT FROM OLD.last_attempt_at
+       OR NEW.last_error IS DISTINCT FROM OLD.last_error THEN
+      RAISE EXCEPTION 'audit export delivery acknowledgement is invalid';
+    END IF;
+  ELSE
+    RAISE EXCEPTION 'invalid audit export state transition';
+  END IF;
+
+  RETURN NEW;
+END
+$outbox_guard$;
+
+CREATE TRIGGER key_lifecycle_audit_outbox_guard
+BEFORE INSERT OR UPDATE OR DELETE ON qembed_crypto.key_lifecycle_audit_outbox
+FOR EACH ROW EXECUTE FUNCTION qembed_crypto.guard_key_audit_outbox();
+
 CREATE FUNCTION qembed_crypto.stage_verification_key(
   p_key_id text,
   p_public_key bytea,
