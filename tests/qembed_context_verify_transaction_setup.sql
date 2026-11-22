@@ -65,7 +65,7 @@ BEGIN
   IF NEW.status = OLD.status THEN
     RAISE EXCEPTION 'verification key lifecycle state cannot be rewritten in place';
   ELSIF OLD.status = 'active' AND NEW.status = 'retired' THEN
-    IF NEW.retired_at IS NULL OR NEW.verify_until < NEW.retired_at + interval '90 seconds'
+    IF NEW.retired_at IS NULL OR NEW.verify_until < NEW.retired_at + interval '120 seconds'
        OR NEW.revoked_at IS NOT NULL THEN
       RAISE EXCEPTION 'retirement requires at least 90 seconds of verification grace';
     END IF;
@@ -94,7 +94,7 @@ FOR EACH ROW EXECUTE FUNCTION qembed_crypto.guard_verification_key_lifecycle();
 
 CREATE FUNCTION qembed_crypto.retire_verification_key(
   p_key_id text,
-  p_verification_grace interval DEFAULT interval '90 seconds'
+  p_verification_grace interval DEFAULT interval '120 seconds'
 )
 RETURNS timestamptz
 LANGUAGE plpgsql
@@ -105,9 +105,9 @@ DECLARE
   v_retired_at timestamptz := clock_timestamp();
   v_verify_until timestamptz;
 BEGIN
-  IF p_verification_grace < interval '90 seconds'
+  IF p_verification_grace < interval '120 seconds'
      OR p_verification_grace > interval '1 hour' THEN
-    RAISE EXCEPTION 'verification grace must be between 90 seconds and 1 hour';
+    RAISE EXCEPTION 'verification grace must be between 120 seconds and 1 hour';
   END IF;
 
   UPDATE qembed_crypto.verification_keys
