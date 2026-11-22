@@ -39,7 +39,7 @@ This is a feasibility experiment, not an implementation of RT-050:
 
 - Token issuance is simulated in a privileged SQL test session. It does not validate a real external Context Issuer, its authentication, or its private-key isolation.
 - The deployment ID is a provisioned test value. Production must define how it is securely provisioned and bound to the exact PostgreSQL cluster/database; database OID alone is not a cluster identity.
-- The probe verifies replay rejection after both COMMIT and ROLLBACK on the same backend, and checks that `pg_current_xact_id()` can be obtained in a `READ ONLY` transaction. Savepoint behavior, retry orchestration, and full connection-pool lifecycle integration remain outstanding.
+- The probe verifies replay rejection after both COMMIT and ROLLBACK on the same backend, confirms that a savepoint rollback preserves the valid outer-transaction context, and checks that `pg_current_xact_id()` can be obtained in a `READ ONLY` transaction. Retry orchestration and full connection-pool lifecycle integration remain outstanding.
 - The probe does not replace identity GUCs in production RLS policies and does not prove end-to-end tenant isolation against arbitrary SQL.
 - It does not test Caller delegation lookup/revocation races, key rotation/revocation, issuer outage, token canonicalization across Rust and SQL, or a complete Rust transaction API.
 - It does not establish that `pg_current_xact_id()` is operationally acceptable for every read-only workload; it intentionally tests the function's actual behavior on the PostgreSQL 19 target.
