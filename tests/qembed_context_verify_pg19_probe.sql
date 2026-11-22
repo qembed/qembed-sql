@@ -34,6 +34,9 @@ BEGIN
   IF qembed_crypto.qembed_context_verify_detached(v_signature, decode('', 'hex'), decode('00', 'hex')) THEN
     RAISE EXCEPTION 'invalid public-key length was accepted';
   END IF;
+  IF qembed_crypto.qembed_context_verify_detached(v_signature, decode(repeat('00', 8193), 'hex'), v_public_key) THEN
+    RAISE EXCEPTION 'message larger than 8192 bytes was accepted';
+  END IF;
 END
 $crypto$;
 
