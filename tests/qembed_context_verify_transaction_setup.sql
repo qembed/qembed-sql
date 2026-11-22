@@ -2,12 +2,23 @@
 -- The trusted issuer runs outside PostgreSQL in the companion Python test.
 -- The wire format matches qembed-store: qctx1:<payload-hex>:<signature-hex>.
 
-DO $role$ BEGIN
+DO $roles$ BEGIN
   CREATE ROLE qembed_runtime NOLOGIN;
 EXCEPTION WHEN duplicate_object THEN NULL;
-END $role$;
+END $roles$;
+
+DO $roles$ BEGIN
+  CREATE ROLE qembed_key_registry_owner NOLOGIN;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $roles$;
+
+DO $roles$ BEGIN
+  CREATE ROLE qembed_key_control_plane LOGIN NOINHERIT;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $roles$;
 
 CREATE SCHEMA qembed_crypto AUTHORIZATION CURRENT_USER;
+GRANT USAGE, CREATE ON SCHEMA qembed_crypto TO qembed_key_registry_owner;
 CREATE EXTENSION qembed_context_verify WITH SCHEMA qembed_crypto;
 
 CREATE TABLE qembed_crypto.verification_keys (
@@ -16,23 +27,39 @@ CREATE TABLE qembed_crypto.verification_keys (
   issuer text NOT NULL,
   audience text NOT NULL,
   deployment_id text NOT NULL,
-  status text NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'retired', 'revoked')),
-  activated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  status text NOT NULL DEFAULT 'staged'
+    CHECK (status IN ('staged', 'active', 'retired', 'revoked')),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  activated_at timestamptz,
   retired_at timestamptz,
   verify_until timestamptz,
   revoked_at timestamptz,
   CHECK (
-    (status = 'active' AND retired_at IS NULL AND verify_until IS NULL AND revoked_at IS NULL)
+    (status = 'staged' AND activated_at IS NULL AND retired_at IS NULL AND verify_until IS NULL AND revoked_at IS NULL)
     OR
-    (status = 'retired' AND retired_at IS NOT NULL AND verify_until IS NOT NULL AND verify_until > retired_at AND revoked_at IS NULL)
+    (status = 'active' AND activated_at IS NOT NULL AND retired_at IS NULL AND verify_until IS NULL AND revoked_at IS NULL)
+    OR
+    (status = 'retired' AND activated_at IS NOT NULL AND retired_at IS NOT NULL AND verify_until > retired_at AND revoked_at IS NULL)
     OR
     (status = 'revoked' AND revoked_at IS NOT NULL)
   )
 );
 
--- Key material and identity are immutable. Lifecycle transitions are monotonic:
--- active -> retired -> revoked, or active -> revoked for emergency response.
+CREATE TABLE qembed_crypto.key_lifecycle_audit (
+  event_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  request_id uuid NOT NULL UNIQUE,
+  key_id text NOT NULL REFERENCES qembed_crypto.verification_keys(key_id),
+  operation text NOT NULL CHECK (operation IN ('stage', 'activate', 'retire', 'revoke')),
+  prior_state text,
+  new_state text NOT NULL,
+  actor_subject text NOT NULL CHECK (length(actor_subject) BETWEEN 1 AND 256),
+  approver_subject text,
+  reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 1024),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+-- Key identity/material is immutable. Production lifecycle is staged -> active
+-- -> retired -> revoked, with staged/active -> revoked emergency paths.
 CREATE FUNCTION qembed_crypto.guard_verification_key_lifecycle()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -44,11 +71,12 @@ BEGIN
   END IF;
 
   IF TG_OP = 'INSERT' THEN
-    IF NEW.status <> 'active'
+    IF NEW.status <> 'staged'
+       OR NEW.activated_at IS NOT NULL
        OR NEW.retired_at IS NOT NULL
        OR NEW.verify_until IS NOT NULL
        OR NEW.revoked_at IS NOT NULL THEN
-      RAISE EXCEPTION 'new verification keys must start active';
+      RAISE EXCEPTION 'new verification keys must start staged';
     END IF;
     RETURN NEW;
   END IF;
@@ -58,25 +86,41 @@ BEGIN
      OR NEW.issuer IS DISTINCT FROM OLD.issuer
      OR NEW.audience IS DISTINCT FROM OLD.audience
      OR NEW.deployment_id IS DISTINCT FROM OLD.deployment_id
-     OR NEW.activated_at IS DISTINCT FROM OLD.activated_at THEN
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
     RAISE EXCEPTION 'verification key identity and public material are immutable';
   END IF;
 
   IF NEW.status = OLD.status THEN
     RAISE EXCEPTION 'verification key lifecycle state cannot be rewritten in place';
+  ELSIF OLD.status = 'staged' AND NEW.status = 'active' THEN
+    IF NEW.activated_at IS NULL OR NEW.retired_at IS NOT NULL
+       OR NEW.verify_until IS NOT NULL OR NEW.revoked_at IS NOT NULL THEN
+      RAISE EXCEPTION 'activation requires only activated_at';
+    END IF;
+  ELSIF OLD.status = 'staged' AND NEW.status = 'revoked' THEN
+    IF NEW.activated_at IS NOT NULL OR NEW.retired_at IS NOT NULL
+       OR NEW.verify_until IS NOT NULL OR NEW.revoked_at IS NULL THEN
+      RAISE EXCEPTION 'staged-key revocation requires only revoked_at';
+    END IF;
   ELSIF OLD.status = 'active' AND NEW.status = 'retired' THEN
-    IF NEW.retired_at IS NULL OR NEW.verify_until IS NULL OR NEW.verify_until < NEW.retired_at + interval '120 seconds'
+    IF NEW.activated_at IS DISTINCT FROM OLD.activated_at
+       OR NEW.retired_at IS NULL OR NEW.verify_until IS NULL
+       OR NEW.verify_until < NEW.retired_at + interval '120 seconds'
+       OR NEW.verify_until > NEW.retired_at + interval '1 hour'
        OR NEW.revoked_at IS NOT NULL THEN
-      RAISE EXCEPTION 'retirement requires at least 120 seconds of verification grace';
+      RAISE EXCEPTION 'retirement requires a 120-second to 1-hour verification grace';
     END IF;
   ELSIF OLD.status = 'active' AND NEW.status = 'revoked' THEN
-    IF NEW.revoked_at IS NULL OR NEW.retired_at IS NOT NULL OR NEW.verify_until IS NOT NULL THEN
-      RAISE EXCEPTION 'direct revocation requires only revoked_at';
+    IF NEW.activated_at IS DISTINCT FROM OLD.activated_at
+       OR NEW.retired_at IS NOT NULL OR NEW.verify_until IS NOT NULL
+       OR NEW.revoked_at IS NULL THEN
+      RAISE EXCEPTION 'active-key emergency revocation has invalid timestamps';
     END IF;
   ELSIF OLD.status = 'retired' AND NEW.status = 'revoked' THEN
-    IF NEW.revoked_at IS NULL
+    IF NEW.activated_at IS DISTINCT FROM OLD.activated_at
        OR NEW.retired_at IS DISTINCT FROM OLD.retired_at
-       OR NEW.verify_until IS DISTINCT FROM OLD.verify_until THEN
+       OR NEW.verify_until IS DISTINCT FROM OLD.verify_until
+       OR NEW.revoked_at IS NULL THEN
       RAISE EXCEPTION 'revocation must preserve retirement audit timestamps';
     END IF;
   ELSE
@@ -92,9 +136,140 @@ CREATE TRIGGER verification_key_lifecycle_guard
 BEFORE INSERT OR UPDATE OR DELETE ON qembed_crypto.verification_keys
 FOR EACH ROW EXECUTE FUNCTION qembed_crypto.guard_verification_key_lifecycle();
 
+CREATE FUNCTION qembed_crypto.prevent_key_audit_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $audit_guard$
+BEGIN
+  RAISE EXCEPTION 'key lifecycle audit is append-only';
+END
+$audit_guard$;
+
+CREATE TRIGGER key_lifecycle_audit_append_only
+BEFORE UPDATE OR DELETE ON qembed_crypto.key_lifecycle_audit
+FOR EACH ROW EXECUTE FUNCTION qembed_crypto.prevent_key_audit_mutation();
+
+CREATE FUNCTION qembed_crypto.stage_verification_key(
+  p_key_id text,
+  p_public_key bytea,
+  p_issuer text,
+  p_audience text,
+  p_deployment_id text,
+  p_actor_subject text,
+  p_request_id uuid,
+  p_reason text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $stage$
+DECLARE
+  v_operation text;
+  v_existing_key_id text;
+BEGIN
+  IF session_user <> 'qembed_key_control_plane' THEN
+    RAISE EXCEPTION 'key management requires the dedicated control-plane identity';
+  END IF;
+  IF p_request_id IS NULL OR p_actor_subject IS NULL OR btrim(p_actor_subject) = ''
+     OR p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'request ID, actor subject and reason are required';
+  END IF;
+
+  SELECT operation, key_id INTO v_operation, v_existing_key_id
+  FROM qembed_crypto.key_lifecycle_audit
+  WHERE request_id = p_request_id;
+  IF FOUND THEN
+    IF v_operation = 'stage' AND v_existing_key_id = p_key_id THEN
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'request ID was already used for a different key operation';
+  END IF;
+
+  INSERT INTO qembed_crypto.verification_keys
+    (key_id, public_key, issuer, audience, deployment_id, status)
+  VALUES
+    (p_key_id, p_public_key, p_issuer, p_audience, p_deployment_id, 'staged');
+
+  INSERT INTO qembed_crypto.key_lifecycle_audit
+    (request_id, key_id, operation, prior_state, new_state, actor_subject, reason)
+  VALUES
+    (p_request_id, p_key_id, 'stage', NULL, 'staged', p_actor_subject, p_reason);
+END
+$stage$;
+
+CREATE FUNCTION qembed_crypto.activate_verification_key(
+  p_key_id text,
+  p_actor_subject text,
+  p_approver_subject text,
+  p_request_id uuid,
+  p_reason text
+)
+RETURNS timestamptz
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $activate$
+DECLARE
+  v_operation text;
+  v_existing_key_id text;
+  v_activated_at timestamptz;
+  v_old_state text;
+BEGIN
+  IF session_user <> 'qembed_key_control_plane' THEN
+    RAISE EXCEPTION 'key management requires the dedicated control-plane identity';
+  END IF;
+  IF p_request_id IS NULL OR p_actor_subject IS NULL OR btrim(p_actor_subject) = ''
+     OR p_approver_subject IS NULL OR btrim(p_approver_subject) = ''
+     OR p_actor_subject = p_approver_subject
+     OR p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'distinct operator and approver, request ID and reason are required';
+  END IF;
+
+  SELECT operation, key_id INTO v_operation, v_existing_key_id
+  FROM qembed_crypto.key_lifecycle_audit
+  WHERE request_id = p_request_id;
+  IF FOUND THEN
+    IF v_operation = 'activate' AND v_existing_key_id = p_key_id THEN
+      SELECT activated_at INTO v_activated_at
+      FROM qembed_crypto.verification_keys WHERE key_id = p_key_id;
+      RETURN v_activated_at;
+    END IF;
+    RAISE EXCEPTION 'request ID was already used for a different key operation';
+  END IF;
+
+  SELECT status INTO v_old_state
+  FROM qembed_crypto.verification_keys
+  WHERE key_id = p_key_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_old_state <> 'staged' THEN
+    RAISE EXCEPTION 'staged verification key not found: %', p_key_id;
+  END IF;
+
+  UPDATE qembed_crypto.verification_keys
+  SET status = 'active', activated_at = clock_timestamp()
+  WHERE key_id = p_key_id
+  RETURNING activated_at INTO v_activated_at;
+
+  INSERT INTO qembed_crypto.key_lifecycle_audit
+    (request_id, key_id, operation, prior_state, new_state,
+     actor_subject, approver_subject, reason)
+  VALUES
+    (p_request_id, p_key_id, 'activate', 'staged', 'active',
+     p_actor_subject, p_approver_subject, p_reason);
+
+  RETURN v_activated_at;
+END
+$activate$;
+
 CREATE FUNCTION qembed_crypto.retire_verification_key(
   p_key_id text,
-  p_verification_grace interval DEFAULT interval '120 seconds'
+  p_verification_grace interval,
+  p_actor_subject text,
+  p_approver_subject text,
+  p_request_id uuid,
+  p_reason text
 )
 RETURNS timestamptz
 LANGUAGE plpgsql
@@ -102,52 +277,122 @@ SECURITY DEFINER
 SET search_path = pg_catalog, qembed_crypto, pg_temp
 AS $retire$
 DECLARE
+  v_operation text;
+  v_existing_key_id text;
   v_retired_at timestamptz := clock_timestamp();
   v_verify_until timestamptz;
+  v_old_state text;
 BEGIN
+  IF session_user <> 'qembed_key_control_plane' THEN
+    RAISE EXCEPTION 'key management requires the dedicated control-plane identity';
+  END IF;
+  IF p_request_id IS NULL OR p_actor_subject IS NULL OR btrim(p_actor_subject) = ''
+     OR p_approver_subject IS NULL OR btrim(p_approver_subject) = ''
+     OR p_actor_subject = p_approver_subject
+     OR p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'distinct operator and approver, request ID and reason are required';
+  END IF;
   IF p_verification_grace < interval '120 seconds'
      OR p_verification_grace > interval '1 hour' THEN
     RAISE EXCEPTION 'verification grace must be between 120 seconds and 1 hour';
   END IF;
 
+  SELECT operation, key_id INTO v_operation, v_existing_key_id
+  FROM qembed_crypto.key_lifecycle_audit
+  WHERE request_id = p_request_id;
+  IF FOUND THEN
+    IF v_operation = 'retire' AND v_existing_key_id = p_key_id THEN
+      SELECT verify_until INTO v_verify_until
+      FROM qembed_crypto.verification_keys WHERE key_id = p_key_id;
+      RETURN v_verify_until;
+    END IF;
+    RAISE EXCEPTION 'request ID was already used for a different key operation';
+  END IF;
+
+  SELECT status INTO v_old_state
+  FROM qembed_crypto.verification_keys
+  WHERE key_id = p_key_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_old_state <> 'active' THEN
+    RAISE EXCEPTION 'active verification key not found: %', p_key_id;
+  END IF;
+
+  v_verify_until := v_retired_at + p_verification_grace;
   UPDATE qembed_crypto.verification_keys
   SET status = 'retired',
       retired_at = v_retired_at,
-      verify_until = v_retired_at + p_verification_grace
-  WHERE key_id = p_key_id AND status = 'active'
-  RETURNING verify_until INTO v_verify_until;
+      verify_until = v_verify_until
+  WHERE key_id = p_key_id;
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'active verification key not found: %', p_key_id;
-  END IF;
+  INSERT INTO qembed_crypto.key_lifecycle_audit
+    (request_id, key_id, operation, prior_state, new_state,
+     actor_subject, approver_subject, reason)
+  VALUES
+    (p_request_id, p_key_id, 'retire', 'active', 'retired',
+     p_actor_subject, p_approver_subject, p_reason);
+
   RETURN v_verify_until;
 END
 $retire$;
 
-CREATE FUNCTION qembed_crypto.revoke_verification_key(p_key_id text)
+CREATE FUNCTION qembed_crypto.revoke_verification_key(
+  p_key_id text,
+  p_actor_subject text,
+  p_request_id uuid,
+  p_reason text
+)
 RETURNS timestamptz
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, qembed_crypto, pg_temp
 AS $revoke$
 DECLARE
-  v_revoked_at timestamptz;
+  v_operation text;
+  v_existing_key_id text;
+  v_revoked_at timestamptz := clock_timestamp();
+  v_old_state text;
 BEGIN
-  UPDATE qembed_crypto.verification_keys
-  SET status = 'revoked',
-      revoked_at = clock_timestamp()
-  WHERE key_id = p_key_id AND status IN ('active', 'retired')
-  RETURNING revoked_at INTO v_revoked_at;
+  IF session_user <> 'qembed_key_control_plane' THEN
+    RAISE EXCEPTION 'key management requires the dedicated control-plane identity';
+  END IF;
+  IF p_request_id IS NULL OR p_actor_subject IS NULL OR btrim(p_actor_subject) = ''
+     OR p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'break-glass actor, incident reference and request ID are required';
+  END IF;
 
-  IF NOT FOUND THEN
+  SELECT operation, key_id INTO v_operation, v_existing_key_id
+  FROM qembed_crypto.key_lifecycle_audit
+  WHERE request_id = p_request_id;
+  IF FOUND THEN
+    IF v_operation = 'revoke' AND v_existing_key_id = p_key_id THEN
+      SELECT revoked_at INTO v_revoked_at
+      FROM qembed_crypto.verification_keys WHERE key_id = p_key_id;
+      RETURN v_revoked_at;
+    END IF;
+    RAISE EXCEPTION 'request ID was already used for a different key operation';
+  END IF;
+
+  SELECT status INTO v_old_state
+  FROM qembed_crypto.verification_keys
+  WHERE key_id = p_key_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_old_state NOT IN ('staged', 'active', 'retired') THEN
     RAISE EXCEPTION 'revocable verification key not found: %', p_key_id;
   END IF;
+
+  UPDATE qembed_crypto.verification_keys
+  SET status = 'revoked', revoked_at = v_revoked_at
+  WHERE key_id = p_key_id;
+
+  INSERT INTO qembed_crypto.key_lifecycle_audit
+    (request_id, key_id, operation, prior_state, new_state, actor_subject, reason)
+  VALUES
+    (p_request_id, p_key_id, 'revoke', v_old_state, 'revoked',
+     p_actor_subject, p_reason);
+
   RETURN v_revoked_at;
 END
 $revoke$;
-
-REVOKE ALL ON FUNCTION qembed_crypto.retire_verification_key(text, interval) FROM PUBLIC;
-REVOKE ALL ON FUNCTION qembed_crypto.revoke_verification_key(text) FROM PUBLIC;
 
 -- Stable for one statement: statement_timestamp and the already-established XID
 -- keep the RLS scalar subquery eligible for a single InitPlan evaluation.
@@ -270,7 +515,7 @@ BEGIN
   -- verification-only until the grace deadline, and only for tokens issued
   -- before retirement whose full lifetime fits inside that deadline.
   -- Revocation is immediate and invalidates even otherwise-live tokens.
-  IF v_key.status = 'revoked'
+  IF v_key.status IN ('staged', 'revoked')
      OR (v_key.status = 'active' AND v_issued_at < v_key.activated_at)
      OR (v_key.status = 'retired' AND (
        v_issued_at > v_key.retired_at
@@ -317,17 +562,49 @@ AS $caller$
   )->>'caller_id')::uuid
 $caller$;
 
+-- Transfer registry and SECURITY DEFINER ownership to a dedicated NOLOGIN role.
+ALTER TABLE qembed_crypto.verification_keys OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_verification_key_lifecycle() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.prevent_key_audit_mutation() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.verified_context(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_tenant_id() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_principal_id() OWNER TO qembed_key_registry_owner;
+
+ALTER FUNCTION qembed_crypto.current_caller_id() OWNER TO qembed_key_registry_owner;
+
+-- The registry owner is the only principal allowed to invoke the low-level C verifier.
+GRANT EXECUTE ON FUNCTION qembed_crypto.qembed_context_verify_detached(bytea, bytea, bytea)
+  TO qembed_key_registry_owner;
+
 REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
-REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto FROM PUBLIC, qembed_runtime;
-REVOKE ALL ON FUNCTION qembed_crypto.verified_context(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION qembed_crypto.current_tenant_id() FROM PUBLIC;
-REVOKE ALL ON FUNCTION qembed_crypto.current_principal_id() FROM PUBLIC;
-REVOKE ALL ON FUNCTION qembed_crypto.current_caller_id() FROM PUBLIC;
-GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA qembed_crypto FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime, qembed_key_control_plane;
 GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  TO qembed_key_control_plane;
 
 CREATE TABLE qembed_crypto.tenant_rows (
   tenant_id uuid NOT NULL,
