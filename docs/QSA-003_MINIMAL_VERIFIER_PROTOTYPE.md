@@ -25,7 +25,7 @@ The workflow builds against Debian Bookworm libsodium 1.0.18 and PostgreSQL 19, 
 - confirms the runtime role cannot call the low-level verifier directly or create objects in the extension schema;
 - compares direct verifier evaluation with an uncorrelated scalar subquery planned as an `InitPlan`.
 
-In run #12, the 10,000-row primitive fixture measured 7.325 ms for direct C verification versus 0.686 ms through the `InitPlan` form (5,000 visible rows, no tenant index). This is a CI microbenchmark, not a production performance guarantee; timing varies with runner load.
+In run #12, the 10,000-row primitive fixture measured 7.280 ms for direct C verification versus 0.511 ms through the `InitPlan` form (5,000 visible rows, no tenant index). This is a CI microbenchmark, not a production performance guarantee; timing varies with runner load.
 
 ### Full transaction-bound context probe
 
@@ -56,5 +56,5 @@ Compare this branch with [the pgsodium prototype PR #68](https://github.com/qemb
 
 ## Validation evidence
 
-- [Minimal verifier workflow run #12](https://github.com/qembed/qembed-sql/actions/runs/45024110220) passed on PostgreSQL 19 / pgvector 0.8.7 using Debian Bookworm libsodium 1.0.18.
-- [SQL smoke run #286](https://github.com/qembed/qembed-sql/actions/runs/45024110210) passed on the same code head.
+- [Minimal verifier workflow run #13](https://github.com/qembed/qembed-sql/actions/runs/45024241023) passed on PostgreSQL 19 / pgvector 0.8.7 using Debian Bookworm libsodium 1.0.18.
+- [SQL smoke run #287](https://github.com/qembed/qembed-sql/actions/runs/45024241068) passed on the same code head.
