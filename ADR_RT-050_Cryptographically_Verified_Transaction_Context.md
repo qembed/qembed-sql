@@ -113,6 +113,8 @@ Per-tenant PostgreSQL login roles and separate connection pools remain a possibl
 - [ ] Complete retry orchestration, error handling and connection-pool lifecycle tests in the Rust transaction layer.
 - [ ] Decide whether atomic one-time-use is required in addition to backend/transaction binding.
 - [ ] Specify issuer authentication, Caller delegation validation, revocation behavior, key rotation and outage behavior.
+- [ ] Evaluate the pgsodium shared-preload and root-key lifecycle requirement, or select an alternative verifier deployment model.
+- [ ] Integrate the one-verification-per-statement `InitPlan` pattern into actual RLS helpers and benchmark representative production policies/data.
 - [ ] Produce a Rust transaction API design and migration/compatibility plan.
 - [ ] Add adversarial SQL tests before any production migration.
 - [ ] Obtain explicit project-owner approval of the complete design.
@@ -123,10 +125,14 @@ The following is experimental evidence only. It does not implement the proposed 
 
 - [SQL PR #68](https://github.com/qembed/qembed-sql/pull/68) builds pgsodium 3.1.11 from exact source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784` against PostgreSQL 19 and verifies the Ed25519 detached-signature API. The source commit signature is valid; the annotated `v3.1.11` tag object is unsigned.
 - pgsodium 3.1.11's IPcrypt implementation requires libsodium 1.0.22 symbols; Debian Bookworm's libsodium 1.0.18 is insufficient. The workflow builds libsodium 1.0.22 from pinned source and asserts that pgsodium resolves `libsodium.so.26`.
-- The test-only verifier is `SECURITY DEFINER`, uses a fixed `search_path` with `pg_temp` last, reads public keys from a table inaccessible to `qembed_runtime`, and grants the runtime role verification but no signing or key-generation capability.
+- The test-only verifier is `SECURITY DEFINER`, uses a fixed `search_path` with `pg_temp` last, reads public keys from a table inaccessible to `qembed_runtime`, and grants the runtime role verification but no signing or key-generation capability. The RLS benchmark also demonstrates the importance of an uncorrelated scalar subquery / `InitPlan` to avoid repeated verification per row.
 - [Prototype workflow run #31](https://github.com/qembed/qembed-sql/actions/runs/45020806755) and [PostgreSQL 19 / pgvector smoke run #246](https://github.com/qembed/qembed-sql/actions/runs/45020806694) passed on the tested code head `bcf65cf6141af8812849705d741f328d5e5141dc`.
 
 The test-only verifier rejects modified signatures, expired tokens, wrong backend PID, wrong database OID, wrong deployment/audience, replay after COMMIT, replay after ROLLBACK on the same backend, and replay from an independent connection. It confirms that forged legacy identity GUCs do not alter the signed claims, that savepoint rollback preserves the valid outer-transaction context, and that `pg_current_xact_id()` can be obtained in a `READ ONLY` transaction.
+
+A test-only RLS experiment compared direct policy evaluation with an uncorrelated scalar subquery. On identical 10,000-row tables (5,000 rows for the signed tenant, no tenant index), the direct verifier helper took 855.463 ms and 30,064 shared buffer hits; the scalar-subquery form produced an explicit `InitPlan` and took 1.143 ms with 67 shared buffer hits. This is a CI microbenchmark, not a production guarantee, but it establishes that the production RLS design must preserve one context verification per statement rather than repeat signature verification per scanned row.
+
+The CI harness also had to put pgsodium in `shared_preload_libraries`: its DDL event trigger reads `pgsodium.enable_event_trigger`, which pgsodium defines during shared preload. Preload also requires a getkey script and loads a root key into server memory. CI uses an ephemeral test-only provider; production must explicitly accept and manage this additional root-key lifecycle or select another verifier deployment model. The Ed25519 verifier itself uses public verification keys and does not use the pgsodium root key.
 
 **Not yet proven:** a real Context Issuer and private-key isolation; production deployment-ID provisioning and cross-cluster uniqueness; token encoding/canonicalization shared by Rust and SQL; Caller delegation and revocation races; key rotation/revocation; issuer outage; RLS policy integration and per-row verification cost; retry/error handling; and actual connection-pool reset/reuse in Rust. The test issues tokens in a privileged SQL test session, uses a test-only verifier and fixtures, and does not replace production identity GUCs.
 
