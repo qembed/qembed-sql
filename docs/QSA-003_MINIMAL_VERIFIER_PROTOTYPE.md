@@ -43,7 +43,7 @@ The SQL verifier:
 - writes an append-only lifecycle audit event and an export-outbox row in the same transaction as every key state change; the separate `qembed_key_audit_exporter` identity can only list pending events, acknowledge delivery, and record sanitized failures through SECURITY DEFINER functions, with no direct audit/outbox table access; control-plane metadata reads expose export status;
 - makes audit export at-least-once and idempotent by event ID, keeps failed deliveries pending for retry, and prevents changes to delivered outbox records;
 - enforces monotonic transitions (`staged -> active -> retired -> revoked`, with `staged -> revoked` and `active -> revoked` emergency paths), immutable key identity/public material, append-only audit rows, idempotency bound to the original request payload, distinct operator/approver subjects for activation and retirement, and a 120-second to one-hour retirement grace;
-- validates the exact 14 version-1 string claims, lowercase UUID syntax (including nonce), issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry times and the 60-second maximum lifetime;
+- validates the exact 14 version-1 claims: all claims except `caller_id` are required strings; `caller_id` must be present and is either a lowercase UUID string or JSON `null` for a Principal-only context. The verifier rejects every other type, missing claim, or unknown field. Tenant/Principal identity, issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry times and the 60-second maximum lifetime remain mandatory;
 - exposes typed tenant, Principal and Caller accessors;
 - reads authorization context only from `app.context_token`.
 
@@ -52,6 +52,10 @@ The integration test also attempts to install the maximum-size token envelope to
 The verified-context function uses statement-stable time and is declared STABLE so the uncorrelated scalar subquery in the RLS policy can be planned as an InitPlan. The integration test asserts that plan shape directly, then rejects modified payload/signature, unknown envelope version, wrong backend/transaction/database/deployment/issuer/version, expired tokens, replay after COMMIT/ROLLBACK and replay from another backend. It verifies savepoint rollback, read-only transactions, typed claim accessors, least privilege, and RLS isolation despite forged legacy identity GUCs.
 
 This is still an external test issuer, not an invocation of the Rust `ContextIssuer` itself. The use of RFC 8785 in Python tests exercises the same canonicalization standard but does not replace a Rust-to-PostgreSQL integration test using `serde_jcs`. The SQL role/function fixture is not a production control plane or a canonical production migration.
+
+## Principal-only and Caller-scoped contexts
+
+Version 1 keeps a fixed 14-claim object. `caller_id` is always present: a UUID string means an explicitly selected, database-validated Caller; JSON `null` means a Principal-only context. The SQL accessor returns SQL NULL for the latter. There is no Principal-to-Caller fallback. Caller-scoped episodic-memory policies must fail closed when the claim is null.
 
 ## Limitations and remaining gates
 
