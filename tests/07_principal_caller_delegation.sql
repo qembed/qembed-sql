@@ -27,6 +27,18 @@ SELECT set_config('app.sql011_auth_delegation',grant_caller_delegation('d1120000
 SELECT set_config('app.sql011_service_delegation',grant_caller_delegation('d1120000-0000-0000-0000-000000000002')::text,false);
 SELECT set_config('app.sql011_anonymous_delegation',grant_caller_delegation('d1120000-0000-0000-0000-000000000003')::text,false);
 
+-- QSA-003 risk demonstration: app.principal_id is a caller-writable setting.
+-- Switching it to another active Principal lets this same runtime session act as that Principal.
+SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000002',false);
+SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000001');
+SELECT tt.chk('QSA-003 runtime can forge Principal GUC and grant as that Principal',
+ $q$SELECT count(*)=1 FROM principal_caller_delegations
+     WHERE tenant_id='d1100000-0000-0000-0000-000000000001'
+       AND principal_id='d1110000-0000-0000-0000-000000000002'
+       AND caller_id='d1120000-0000-0000-0000-000000000001'
+       AND revoked_at IS NULL$q$);
+SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000001',false);
+
 SELECT tt.chk('SQL-011 principal can delegate to Authenticated, Service and Anonymous callers',
  $q$SELECT count(*)=3 FROM principal_caller_delegations
      WHERE tenant_id='d1100000-0000-0000-0000-000000000001'
