@@ -38,6 +38,7 @@ DECLARE
   v_issued_at timestamptz;
   v_expires_at timestamptz;
   v_required_claim text;
+  v_claim_count integer;
 BEGIN
   -- Reject unsupported envelope versions, extra fields, uppercase/non-hex
   -- encodings, malformed lengths and payloads above the C verifier's 8 KiB cap.
@@ -84,7 +85,11 @@ BEGIN
 
   -- Only after signature verification do we treat the parsed claims as trusted.
   v_claims := convert_from(v_payload, 'UTF8')::jsonb;
-  IF jsonb_typeof(v_claims) <> 'object' OR jsonb_object_length(v_claims) <> 14 THEN
+  IF jsonb_typeof(v_claims) <> 'object' THEN
+    RETURN NULL;
+  END IF;
+  SELECT count(*) INTO v_claim_count FROM jsonb_object_keys(v_claims);
+  IF v_claim_count <> 14 THEN
     -- Version 1 has an exact claim set; unknown fields fail closed.
     RETURN NULL;
   END IF;
