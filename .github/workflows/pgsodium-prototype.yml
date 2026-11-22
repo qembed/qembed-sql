@@ -40,7 +40,7 @@ jobs:
         run: |
           docker exec --user root qembed-pg19 bash -euxc '
             apt-get update
-            apt-get install -y --no-install-recommends build-essential libsodium-dev postgresql-server-dev-19 curl unzip
+            apt-get install -y --no-install-recommends build-essential ca-certificates libsodium-dev postgresql-server-dev-19 curl unzip
             test "$(pg_config --version | awk "{print \$2}")" = "19.0"
             curl --fail --location --retry 3 \
               https://api.pgxn.org/dist/pgsodium-3.1.11.zip \
