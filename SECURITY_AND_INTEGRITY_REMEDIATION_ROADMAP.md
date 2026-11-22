@@ -15,7 +15,7 @@
 This roadmap supersedes the ordinary SQL feature backlog while any P0 item is open.
 
 1. **P0 freeze:** do not start unrelated SQL features until all P0 items below are closed or explicitly accepted through a documented threat-model decision by the project owner.
-2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the current revalidation base is `8d4ea1e88b467bec0240bfe7657a0181609d2110`. Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
+2. **Revalidate first:** the supplied audit was run against commit `164da3c`; the current revalidation base is `10e87c07153ad0acd1c80edf1ecb752a20c64e28` (`master`, 2026-11-22). Every finding starts as `REVALIDATE`, not as an assertion that the current HEAD still contains the defect.
 3. **One security boundary per PR:** prefer small, independently reviewable PRs. Do not combine unrelated role, RLS, trigger, retention, or dependency changes.
 4. **Negative tests are mandatory:** tests must prove that the forbidden operation fails or reveals no data, not merely that the intended operation succeeds.
 5. **Test with the real application role:** tests run as superuser or schema owner do not prove runtime-role isolation. Include role switching and realistic grants.
