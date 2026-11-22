@@ -2,7 +2,7 @@
 -- Tests detached-signature verification and binding to backend, transaction,
 -- database and provisioned deployment identity.
 
-CREATE ROLE qembed_runtime NOLOGIN;
+DO $ BEGIN\n  CREATE ROLE qembed_runtime NOLOGIN;\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $;
 CREATE SCHEMA qsa003_probe;
 CREATE TABLE qsa003_probe.verification_keys (
   key_id text PRIMARY KEY, public_key bytea NOT NULL, issuer text NOT NULL,
