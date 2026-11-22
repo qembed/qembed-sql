@@ -15,6 +15,7 @@ BEGIN
  END IF;
 END $preflight$;
 
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_definer;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_definer;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_definer;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_definer;
