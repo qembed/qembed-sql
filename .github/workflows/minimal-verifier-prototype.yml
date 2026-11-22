@@ -1,17 +1,7 @@
 name: QSA-003 minimal Ed25519 verifier PostgreSQL 19 prototype
 
 on:
-  push:
-    branches: [prototype/qsa003-minimal-ed25519-verifier]
-    paths:
-      - ".github/workflows/minimal-verifier-prototype.yml"
-      - "extensions/qembed_context_verify/**"
-      - "tests/qembed_context_verify_pg19_probe.sql"
-      - "tests/qembed_context_verify_transaction_setup.sql"
-      - "tests/qembed_context_verify_transaction_probe.py"
-      - "docs/QSA-003_MINIMAL_VERIFIER_PROTOTYPE.md"
   pull_request:
-    types: [opened, reopened]
     branches: [master]
     paths:
       - ".github/workflows/minimal-verifier-prototype.yml"
