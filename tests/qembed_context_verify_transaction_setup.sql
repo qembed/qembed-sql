@@ -515,7 +515,7 @@ BEGIN
   -- verification-only until the grace deadline, and only for tokens issued
   -- before retirement whose full lifetime fits inside that deadline.
   -- Revocation is immediate and invalidates even otherwise-live tokens.
-  IF v_key.status = 'revoked'
+  IF v_key.status IN ('staged', 'revoked')
      OR (v_key.status = 'active' AND v_issued_at < v_key.activated_at)
      OR (v_key.status = 'retired' AND (
        v_issued_at > v_key.retired_at
@@ -562,17 +562,49 @@ AS $caller$
   )->>'caller_id')::uuid
 $caller$;
 
+-- Transfer registry and SECURITY DEFINER ownership to a dedicated NOLOGIN role.
+ALTER TABLE qembed_crypto.verification_keys OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_verification_key_lifecycle() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.prevent_key_audit_mutation() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.verified_context(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_tenant_id() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.current_principal_id() OWNER TO qembed_key_registry_owner;
+
+ALTER FUNCTION qembed_crypto.current_caller_id() OWNER TO qembed_key_registry_owner;
+
+-- The registry owner is the only principal allowed to invoke the low-level C verifier.
+GRANT EXECUTE ON FUNCTION qembed_crypto.qembed_context_verify_detached(bytea, bytea, bytea)
+  TO qembed_key_registry_owner;
+
 REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
-REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto FROM PUBLIC, qembed_runtime;
-REVOKE ALL ON FUNCTION qembed_crypto.verified_context(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION qembed_crypto.current_tenant_id() FROM PUBLIC;
-REVOKE ALL ON FUNCTION qembed_crypto.current_principal_id() FROM PUBLIC;
-REVOKE ALL ON FUNCTION qembed_crypto.current_caller_id() FROM PUBLIC;
-GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA qembed_crypto
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA qembed_crypto FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime, qembed_key_control_plane;
 GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  TO qembed_key_control_plane;
 
 CREATE TABLE qembed_crypto.tenant_rows (
   tenant_id uuid NOT NULL,
