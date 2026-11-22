@@ -571,7 +571,10 @@ RETURNS TABLE (
   actor_subject text,
   approver_subject text,
   reason text,
-  created_at timestamptz
+  created_at timestamptz,
+  audit_export_status text,
+  audit_export_attempts integer,
+  audit_exported_at timestamptz
 )
 LANGUAGE plpgsql STABLE
 SECURITY DEFINER
@@ -584,11 +587,134 @@ BEGIN
 
   RETURN QUERY
   SELECT a.event_id, a.request_id, a.key_id, a.operation, a.prior_state,
-         a.new_state, a.actor_subject, a.approver_subject, a.reason, a.created_at
+         a.new_state, a.actor_subject, a.approver_subject, a.reason, a.created_at,
+         o.delivery_status, o.attempt_count, o.delivered_at
   FROM qembed_crypto.key_lifecycle_audit AS a
+  JOIN qembed_crypto.key_lifecycle_audit_outbox AS o USING (event_id)
   WHERE a.request_id = p_request_id;
 END
 $get_operation$;
+
+CREATE FUNCTION qembed_crypto.list_pending_key_audit_exports(p_limit integer DEFAULT 100)
+RETURNS TABLE (
+  event_id bigint,
+  request_id uuid,
+  key_id text,
+  operation text,
+  prior_state text,
+  new_state text,
+  actor_subject text,
+  approver_subject text,
+  reason text,
+  created_at timestamptz,
+  attempt_count integer,
+  last_attempt_at timestamptz,
+  last_error text
+)
+LANGUAGE plpgsql STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $list_exports$
+BEGIN
+  IF session_user <> 'qembed_key_audit_exporter' THEN
+    RAISE EXCEPTION 'audit export requires the dedicated exporter identity';
+  END IF;
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > 500 THEN
+    RAISE EXCEPTION 'audit export batch size must be between 1 and 500';
+  END IF;
+
+  RETURN QUERY
+  SELECT a.event_id, a.request_id, a.key_id, a.operation, a.prior_state,
+         a.new_state, a.actor_subject, a.approver_subject, a.reason,
+         a.created_at, o.attempt_count, o.last_attempt_at, o.last_error
+  FROM qembed_crypto.key_lifecycle_audit AS a
+  JOIN qembed_crypto.key_lifecycle_audit_outbox AS o USING (event_id)
+  WHERE o.delivery_status = 'pending'
+  ORDER BY a.event_id
+  LIMIT p_limit;
+END
+$list_exports$;
+
+CREATE FUNCTION qembed_crypto.mark_key_audit_exported(
+  p_event_id bigint,
+  p_sink_receipt text
+)
+RETURNS timestamptz
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $mark_exported$
+DECLARE
+  v_status text;
+  v_existing_receipt text;
+  v_delivered_at timestamptz;
+BEGIN
+  IF session_user <> 'qembed_key_audit_exporter' THEN
+    RAISE EXCEPTION 'audit export requires the dedicated exporter identity';
+  END IF;
+  IF p_sink_receipt IS NULL OR btrim(p_sink_receipt) = '' OR length(p_sink_receipt) > 256 THEN
+    RAISE EXCEPTION 'a bounded external sink receipt is required';
+  END IF;
+
+  SELECT delivery_status, sink_receipt, delivered_at
+  INTO v_status, v_existing_receipt, v_delivered_at
+  FROM qembed_crypto.key_lifecycle_audit_outbox
+  WHERE event_id = p_event_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'audit export event not found: %', p_event_id;
+  END IF;
+  IF v_status = 'delivered' THEN
+    IF v_existing_receipt = p_sink_receipt THEN
+      RETURN v_delivered_at;
+    END IF;
+    RAISE EXCEPTION 'audit event was already acknowledged with a different sink receipt';
+  END IF;
+
+  UPDATE qembed_crypto.key_lifecycle_audit_outbox
+  SET delivery_status = 'delivered',
+      delivered_at = clock_timestamp(),
+      sink_receipt = p_sink_receipt
+  WHERE event_id = p_event_id
+  RETURNING delivered_at INTO v_delivered_at;
+
+  RETURN v_delivered_at;
+END
+$mark_exported$;
+
+CREATE FUNCTION qembed_crypto.record_key_audit_export_failure(
+  p_event_id bigint,
+  p_error text
+)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $record_export_failure$
+DECLARE
+  v_attempt_count integer;
+BEGIN
+  IF session_user <> 'qembed_key_audit_exporter' THEN
+    RAISE EXCEPTION 'audit export requires the dedicated exporter identity';
+  END IF;
+  IF p_error IS NULL OR btrim(p_error) = '' THEN
+    RAISE EXCEPTION 'a sanitized export failure reason is required';
+  END IF;
+
+  UPDATE qembed_crypto.key_lifecycle_audit_outbox
+  SET attempt_count = attempt_count + 1,
+      last_attempt_at = clock_timestamp(),
+      last_error = left(p_error, 1024)
+  WHERE event_id = p_event_id
+    AND delivery_status = 'pending'
+  RETURNING attempt_count INTO v_attempt_count;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'pending audit export event not found: %', p_event_id;
+  END IF;
+
+  RETURN v_attempt_count;
+END
+$record_export_failure$;
 
 -- Stable for one statement: statement_timestamp and the already-established XID
 -- keep the RLS scalar subquery eligible for a single InitPlan evaluation.
@@ -761,8 +887,10 @@ $caller$;
 -- Transfer registry and SECURITY DEFINER ownership to a dedicated NOLOGIN role.
 ALTER TABLE qembed_crypto.verification_keys OWNER TO qembed_key_registry_owner;
 ALTER TABLE qembed_crypto.key_lifecycle_audit OWNER TO qembed_key_registry_owner;
+ALTER TABLE qembed_crypto.key_lifecycle_audit_outbox OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.guard_verification_key_lifecycle() OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.prevent_key_audit_mutation() OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.guard_key_audit_outbox() OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.stage_verification_key(text, bytea, text, text, text, text, uuid, text)
   OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.activate_verification_key(text, text, text, uuid, text)
@@ -773,6 +901,9 @@ ALTER FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
   OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.list_verification_keys(text) OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_pending_key_audit_exports(integer) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text) OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.verified_context(text) OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.current_tenant_id() OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.current_principal_id() OWNER TO qembed_key_registry_owner;
@@ -790,7 +921,7 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA qembed_crypto
   FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA qembed_crypto FROM PUBLIC;
 
-GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime, qembed_key_control_plane;
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
 GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
@@ -807,6 +938,12 @@ GRANT EXECUTE ON FUNCTION qembed_crypto.list_verification_keys(text)
   TO qembed_key_control_plane;
 GRANT EXECUTE ON FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid)
   TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_pending_key_audit_exports(integer)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.mark_key_audit_exported(bigint, text)
+  TO qembed_key_audit_exporter;
+GRANT EXECUTE ON FUNCTION qembed_crypto.record_key_audit_export_failure(bigint, text)
+  TO qembed_key_audit_exporter;
 
 CREATE TABLE qembed_crypto.tenant_rows (
   tenant_id uuid NOT NULL,
