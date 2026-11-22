@@ -61,7 +61,7 @@ The Rust side is no longer a Draft branch. Rust PR #93 was merged into `qembed-o
 - setting `app.principal_id` to another Principal allows the runtime role to create a delegation as that Principal;
 - setting `app.caller_id` directly switches episodic-memory visibility from Caller A to Caller B without going through the resolver.
 
-The test is wired into `tests/run_smoke.sh` after the existing tenant, delegation and Caller-memory fixtures. SQL PR #70 current-head workflow [#45073206894](https://github.com/qembed/qembed-sql/actions/runs/45073206894) passed the full PostgreSQL 19 / pgvector 0.8.7 smoke suite after the documentation correction: **442/442**. Its expected pass means the known weakness is reproduced and documented. After remediation, this test must be inverted into negative assertions: forged legacy GUC writes must have no effect on effective identity.
+The test is wired into `tests/run_smoke.sh` after the existing tenant, delegation and Caller-memory fixtures. SQL PR #70 current-head workflow [#45073206894](https://github.com/qembed/qembed-sql/actions/runs/45073206894) passed the full PostgreSQL 19 / pgvector 0.8.7 smoke suite after the documentation correction: **442/442**. The separate canonical signed-context migration probe now proves that these legacy GUC changes no longer alter effective identity after the candidate migration is applied. Its expected pass means the known weakness is reproduced and documented. After remediation, this test must be inverted into negative assertions: forged legacy GUC writes must have no effect on effective identity.
 
 ## 5. Required production migration
 
@@ -71,9 +71,9 @@ The selected direction is the qctx1 signed transaction context implemented as a 
 2. Remove `app.caller_id` as an authorization input and remove the SQL resolver's `set_config('app.caller_id', ...)` side effect.
 3. Redesign the pre-token delegation resolver used by ContextIssuer to accept the trusted tenant and Principal identifiers as explicit bound arguments, validate the exact active delegation and lock Principal/Caller/delegation rows, but never install an authorization GUC. The resolver result is used by the trusted Rust issuer to form the signed Caller claim; it is not an RLS identity source.
 4. Convert `grant_caller_delegation` and `revoke_caller_delegation` to use verified token claims. Do not leave a legacy-GUC fallback.
-5. Migrate every Rust repository transaction entry point from legacy `begin_tenant_transaction` to a signed-context transaction supplied with trusted Scope, selected Caller and ContextIssuer. Keep a separate explicit bootstrap-only transaction API only if its privileges and non-data-access use are demonstrated and reviewed.
-6. Prove commit, rollback, savepoint, transaction restart, connection-pool reuse, same-backend replay and cross-backend replay behavior using the real Rust ContextIssuer and PostgreSQL 19 verifier.
-7. Run negative tests as the actual `qembed_runtime` identity: forged tenant/Principal/Caller GUCs do not alter effective identity; modified/expired/wrong-binding tokens fail; runtime cannot read/change verification keys or mint signatures; worker discovery remains unavailable.
+5. [x] Migrate every production Rust repository transaction entry point to signed-context transactions in Rust PR #93; `begin_tenant_transaction` remains only for compatibility/tests.
+6. [x] Apply the candidate migration to the canonical clean-install schema in PostgreSQL 19 workflow #45073593853; the qctx1/JCS probe covers backend/transaction/database binding, replay, savepoint, READ ONLY and GUC capacity. [ ] Repeat with the real Rust ContextIssuer against the canonical migrated schema.
+7. [x] The canonical-schema prototype probe runs as `qembed_runtime` and verifies forged tenant/Principal/Caller GUCs do not alter effective identity; modified/expired/wrong-binding tokens fail; runtime cannot read/change verification keys or mint signatures. Workflow #45073593853 passed. [ ] Repeat with the merged Rust ContextIssuer and canonical SQL migration.
 8. Package and review the native verifier, run independent security review and fuzzing, define ABI/build provenance and supported PostgreSQL versions, and benchmark representative RLS policies before production rollout.
 
 ## 6. Current status
@@ -81,9 +81,9 @@ The selected direction is the qctx1 signed transaction context implemented as a 
 - Source-level consumer map: completed in this PR.
 - Current-risk negative-boundary demonstration: passed SQL PR #70 current-head PostgreSQL 19 / pgvector 0.8.7 workflow #45073206894 (442/442).
 - Signed-context direction: selected and accepted as the remediation architecture.
-- SQL verifier + lifecycle feasibility prototype: SQL PR #69, still Draft and not production-approved; exact current-head PostgreSQL 19 verifier and smoke workflows passed.
+- SQL verifier + lifecycle + canonical RLS migration candidate: Draft branch `prototype/qsa003-canonical-signed-context`; exact canonical PostgreSQL 19 workflow #45073593853 passed. It is not merged or production-approved.
 - Rust ContextIssuer/PostgreSQL integration: Rust PR #93 merged; production repository entry points now use signed context.
-- Canonical SQL RLS/function migration and removal of legacy GUC authorization reads: not implemented. This is the remaining code-level blocker for QSA-003.
+- Canonical SQL RLS/function migration: candidate implementation and external-issuer test exist and pass on the canonical clean-install fixture, but are not merged to SQL `master`; this remains the coordinated deployment blocker.
 - Independent review, fuzzing, packaging/provenance, supported PostgreSQL matrix, representative workload benchmark and deployment evidence: pending.
 
 **QSA-003 remains `IN_PROGRESS`, not `VERIFIED`.** A green smoke run for the exploit-demonstration test only confirms that the current weakness is reproducible. Closure requires the inverted negative assertions and all production migration/release gates above.
