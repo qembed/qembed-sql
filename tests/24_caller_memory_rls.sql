@@ -48,6 +48,13 @@ SELECT tt.chk('T-27 resolver installs Caller A transaction context',
  $q$SELECT current_setting('app.caller_id',true)='c2720000-0000-0000-0000-000000000001'$q$);
 SELECT tt.chk('T-27 Caller A sees own episodic memories',
  $q$SELECT count(*)=2 FROM memories WHERE memory_kind='episodic'$q$);
+-- QSA-003 risk demonstration: direct writes to app.caller_id bypass the
+-- resolver's intended identity binding because the runtime role can set the GUC.
+SELECT set_config('app.caller_id','c2720000-0000-0000-0000-000000000002',true);
+SELECT tt.chk('QSA-003 runtime can forge Caller GUC and read Caller B episodic memory',
+ $q$SELECT count(*)=1 FROM memories WHERE id='c2740000-0000-0000-0000-000000000003'$q$);
+SELECT set_config('app.caller_id','c2720000-0000-0000-0000-000000000001',true);
+
 SELECT tt.chk('T-27 Caller A cannot see Caller B episodic memory',
  $q$SELECT count(*)=0 FROM memories WHERE id='c2740000-0000-0000-0000-000000000003'$q$);
 SELECT tt.chk('T-27 Caller A sees own embedding only',
