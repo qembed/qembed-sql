@@ -44,7 +44,7 @@ The SQL verifier:
 
 The integration test also attempts to install the maximum-size token envelope to verify PostgreSQL GUC capacity for the documented 8 KiB payload limit. If PostgreSQL rejects that value, the protocol's hex envelope and payload bound must be revisited together with the Rust issuer; do not silently truncate or switch encodings.
 
-The test rejects modified payload/signature, unknown envelope version, wrong backend/transaction/database/deployment/issuer/version, expired tokens, replay after COMMIT/ROLLBACK and replay from another backend. It verifies savepoint rollback, read-only transactions, typed claim accessors, least privilege, and RLS isolation despite forged legacy identity GUCs.
+The verified-context function uses statement-stable time and is declared STABLE so the uncorrelated scalar subquery in the RLS policy can be planned as an InitPlan. The integration test asserts that plan shape directly, then rejects modified payload/signature, unknown envelope version, wrong backend/transaction/database/deployment/issuer/version, expired tokens, replay after COMMIT/ROLLBACK and replay from another backend. It verifies savepoint rollback, read-only transactions, typed claim accessors, least privilege, and RLS isolation despite forged legacy identity GUCs.
 
 This is still an external test issuer, not an invocation of the Rust `ContextIssuer` itself. The use of RFC 8785 in Python tests exercises the same canonicalization standard but does not replace a Rust-to-PostgreSQL integration test using `serde_jcs`.
 
