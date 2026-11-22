@@ -102,17 +102,17 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `DOCUMENTED_RISK` — [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) explicitly states that the identity GUCs are session-settable and forgeable by arbitrary SQL under `qembed_runtime`. The project owner selected a signed transaction-context direction; a parked, unmerged design plan is recorded on branch [`architecture/rt-050-signed-transaction-context`](https://github.com/qembed/qembed-sql/tree/architecture/rt-050-signed-transaction-context) in `ADR_RT-050_Cryptographically_Verified_Transaction_Context.md`. This is a design decision only: the current GUC trust gap remains open until PostgreSQL 19 verification and the Rust/SQL contract are prototyped, tested and deployed.
+**Current status:** `DOCUMENTED_RISK` — [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) explicitly states that the identity GUCs are session-settable and forgeable by arbitrary SQL under `qembed_runtime`. The project owner selected a signed transaction-context direction; a parked, unmerged design plan is recorded on branch [`architecture/rt-050-signed-transaction-context`](https://github.com/qembed/qembed-sql/tree/architecture/rt-050-signed-transaction-context) in `ADR_RT-050_Cryptographically_Verified_Transaction_Context.md`. QSA-003 source inventory and executable spoofing demonstrations are being added in [PR TBD] (branch `audit/qsa-003-guc-identity-inventory`); they document the current exposure, not a mitigation. The trust gap remains open until PostgreSQL 19 verification and the Rust/SQL contract are prototyped, tested and deployed.
 
 **Reported behavior:** `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session settings writable by the runtime role. Under arbitrary SQL execution as `qembed_runtime`, a caller can forge context and bypass the intended delegation boundary, including episodic-memory isolation.
 
 **Required work**
-- [ ] Map every identity/security decision derived from these GUCs and every function that sets or consumes them.
-- [ ] State explicitly whether arbitrary SQL execution under `qembed_runtime` is inside or outside the database threat model.
-- [ ] Record the consequences: RLS driven by caller-writable GUCs is tenant isolation against application mistakes, not an independent boundary against SQL execution as that role.
-- [ ] Evaluate mitigations that do not silently change the Rust transaction contract (for example, narrower database roles or a trusted context-establishment boundary).
-- [ ] Add tests that demonstrate the current boundary and prevent documentation from claiming stronger isolation than is actually provided.
-- [ ] Obtain an explicit owner decision: remediation design or `ACCEPTED_RISK` with rationale.
+- [x] Map every identity/security decision derived from these GUCs and every function that sets or consumes them in `QSA-003_GUC_IDENTITY_INVENTORY.md`.
+- [x] State explicitly whether arbitrary SQL execution under `qembed_runtime` is inside or outside the database threat model: it is inside the attack scenario; the current database boundary does not withstand it.
+- [x] Record the consequences: RLS driven by caller-writable GUCs is tenant isolation against application mistakes, not an independent boundary against SQL execution as that role.
+- [ ] Evaluate and prototype mitigations that do not silently change the Rust transaction contract (RT-050 is a proposal, not a validated implementation).
+- [x] Add tests that demonstrate the current boundary for tenant, Principal, and Caller GUC spoofing. These are risk-demonstration tests and must be inverted after mitigation.
+- [ ] Obtain an explicit owner decision approving the complete remediation design or `ACCEPTED_RISK` with rationale.
 
 **Acceptance:** the threat model is explicit, technically accurate, and approved. This item cannot be closed merely by adding prose while product/security claims still imply GUCs are unforgeable.
 
