@@ -155,11 +155,12 @@ def main():
         if verify(cursor, payload, signature) != claims:
             raise AssertionError("valid externally issued context was not accepted")
         cursor.execute(
-            "SELECT count(*), min(tenant_id)::text, max(tenant_id)::text "
-            "FROM qembed_crypto.tenant_rows"
+            "SELECT count(*), bool_and(tenant_id = %s::uuid) "
+            "FROM qembed_crypto.tenant_rows",
+            (TENANT_A,),
         )
-        row_count, min_tenant, max_tenant = cursor.fetchone()
-        if row_count != 5 or min_tenant != TENANT_A or max_tenant != TENANT_A:
+        row_count, only_signed_tenant = cursor.fetchone()
+        if row_count != 5 or not only_signed_tenant:
             raise AssertionError("RLS trusted a forged identity GUC instead of signed tenant claim")
 
         cursor.execute(
