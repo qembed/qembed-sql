@@ -7,7 +7,7 @@ DO $role$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $role$;
 
-CREATE SCHEMA qembed_crypto AUTHORIZATION postgres;
+CREATE SCHEMA qembed_crypto AUTHORIZATION CURRENT_USER;
 CREATE EXTENSION qembed_context_verify WITH SCHEMA qembed_crypto;
 
 CREATE TABLE qembed_crypto.verification_keys (
