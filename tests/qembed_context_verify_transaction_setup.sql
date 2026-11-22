@@ -916,7 +916,7 @@ GRANT EXECUTE ON FUNCTION qembed_crypto.qembed_context_verify_detached(bytea, by
 
 REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto
-  FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
+  FROM PUBLIC, qembed_runtime, qembed_key_control_plane, qembed_key_audit_exporter;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA qembed_crypto
   FROM PUBLIC, qembed_runtime, qembed_key_control_plane;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA qembed_crypto FROM PUBLIC;
