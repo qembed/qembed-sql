@@ -102,6 +102,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, qembed_crypto, pg_temp
 AS $retire$
 DECLARE
+  v_retired_at timestamptz := clock_timestamp();
   v_verify_until timestamptz;
 BEGIN
   IF p_verification_grace < interval '90 seconds'
@@ -111,8 +112,8 @@ BEGIN
 
   UPDATE qembed_crypto.verification_keys
   SET status = 'retired',
-      retired_at = clock_timestamp(),
-      verify_until = clock_timestamp() + p_verification_grace
+      retired_at = v_retired_at,
+      verify_until = v_retired_at + p_verification_grace
   WHERE key_id = p_key_id AND status = 'active'
   RETURNING verify_until INTO v_verify_until;
 
