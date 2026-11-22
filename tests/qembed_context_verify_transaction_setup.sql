@@ -434,6 +434,71 @@ BEGIN
 END
 $revoke$;
 
+-- The control plane reads public metadata and audit evidence only through
+-- SECURITY DEFINER functions; it never receives direct table SELECT grants.
+CREATE FUNCTION qembed_crypto.list_verification_keys(p_deployment_id text)
+RETURNS TABLE (
+  key_id text,
+  public_key bytea,
+  issuer text,
+  audience text,
+  deployment_id text,
+  status text,
+  created_at timestamptz,
+  activated_at timestamptz,
+  retired_at timestamptz,
+  verify_until timestamptz,
+  revoked_at timestamptz
+)
+LANGUAGE plpgsql STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $list_keys$
+BEGIN
+  IF session_user <> 'qembed_key_control_plane' THEN
+    RAISE EXCEPTION 'key metadata requires the dedicated control-plane identity';
+  END IF;
+
+  RETURN QUERY
+  SELECT k.key_id, k.public_key, k.issuer, k.audience, k.deployment_id,
+         k.status, k.created_at, k.activated_at, k.retired_at,
+         k.verify_until, k.revoked_at
+  FROM qembed_crypto.verification_keys AS k
+  WHERE k.deployment_id = p_deployment_id
+  ORDER BY k.created_at, k.key_id;
+END
+$list_keys$;
+
+CREATE FUNCTION qembed_crypto.get_key_lifecycle_operation(p_request_id uuid)
+RETURNS TABLE (
+  event_id bigint,
+  request_id uuid,
+  key_id text,
+  operation text,
+  prior_state text,
+  new_state text,
+  actor_subject text,
+  approver_subject text,
+  reason text,
+  created_at timestamptz
+)
+LANGUAGE plpgsql STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $get_operation$
+BEGIN
+  IF session_user <> 'qembed_key_control_plane' THEN
+    RAISE EXCEPTION 'key lifecycle audit requires the dedicated control-plane identity';
+  END IF;
+
+  RETURN QUERY
+  SELECT a.event_id, a.request_id, a.key_id, a.operation, a.prior_state,
+         a.new_state, a.actor_subject, a.approver_subject, a.reason, a.created_at
+  FROM qembed_crypto.key_lifecycle_audit AS a
+  WHERE a.request_id = p_request_id;
+END
+$get_operation$;
+
 -- Stable for one statement: statement_timestamp and the already-established XID
 -- keep the RLS scalar subquery eligible for a single InitPlan evaluation.
 CREATE FUNCTION qembed_crypto.verified_context(p_token text)
@@ -615,6 +680,8 @@ ALTER FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text,
   OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
   OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.list_verification_keys(text) OWNER TO qembed_key_registry_owner;
+ALTER FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid) OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.verified_context(text) OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.current_tenant_id() OWNER TO qembed_key_registry_owner;
 ALTER FUNCTION qembed_crypto.current_principal_id() OWNER TO qembed_key_registry_owner;
@@ -644,6 +711,10 @@ GRANT EXECUTE ON FUNCTION qembed_crypto.activate_verification_key(text, text, te
 GRANT EXECUTE ON FUNCTION qembed_crypto.retire_verification_key(text, interval, text, text, uuid, text)
   TO qembed_key_control_plane;
 GRANT EXECUTE ON FUNCTION qembed_crypto.revoke_verification_key(text, text, uuid, text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.list_verification_keys(text)
+  TO qembed_key_control_plane;
+GRANT EXECUTE ON FUNCTION qembed_crypto.get_key_lifecycle_operation(uuid)
   TO qembed_key_control_plane;
 
 CREATE TABLE qembed_crypto.tenant_rows (
