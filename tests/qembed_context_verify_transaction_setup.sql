@@ -20,7 +20,7 @@ CREATE TABLE qembed_crypto.verification_keys (
 
 CREATE FUNCTION qembed_crypto.verified_context(p_token text)
 RETURNS jsonb
-LANGUAGE plpgsql
+LANGUAGE plpgsql STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, qembed_crypto, pg_temp
 AS $verify$
@@ -34,7 +34,7 @@ DECLARE
   v_key record;
   v_key_id text;
   v_database_oid text;
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz := statement_timestamp();
   v_issued_at timestamptz;
   v_expires_at timestamptz;
   v_required_claim text;
