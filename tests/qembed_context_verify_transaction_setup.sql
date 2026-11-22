@@ -108,6 +108,532 @@ BEGIN
      OR v_claims->>'tenant_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      OR v_claims->>'principal_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      OR v_claims->>'caller_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+  END IF;
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto FROM PUBLIC, qembed_runtime;
+REVOKE ALL ON FUNCTION qembed_crypto.verified_context(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_tenant_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_principal_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_caller_id() FROM PUBLIC;
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
+     OR v_claims->>'nonce' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+    RETURN NULL;
+  END IF;
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto FROM PUBLIC, qembed_runtime;
+REVOKE ALL ON FUNCTION qembed_crypto.verified_context(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_tenant_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_principal_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_caller_id() FROM PUBLIC;
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
+     OR v_claims->>'key_id' IS DISTINCT FROM v_key.key_id THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto FROM PUBLIC, qembed_runtime;
+REVOKE ALL ON FUNCTION qembed_crypto.verified_context(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_tenant_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_principal_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_caller_id() FROM PUBLIC;
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
+     OR v_claims->>'nonce' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+  END IF;
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto FROM PUBLIC, qembed_runtime;
+REVOKE ALL ON FUNCTION qembed_crypto.verified_context(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_tenant_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_principal_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_caller_id() FROM PUBLIC;
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
+     OR v_claims->>'nonce' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+    RETURN NULL;
+  END IF;
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto FROM PUBLIC, qembed_runtime;
+REVOKE ALL ON FUNCTION qembed_crypto.verified_context(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_tenant_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_principal_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_caller_id() FROM PUBLIC;
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
+     OR v_claims->>'key_id' IS DISTINCT FROM v_key.key_id THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT oid::text INTO STRICT v_database_oid
+  FROM pg_database
+  WHERE datname = current_database();
+
+  v_issued_at := (v_claims->>'issued_at')::timestamptz;
+  v_expires_at := (v_claims->>'expires_at')::timestamptz;
+
+  IF v_claims->>'issuer' IS DISTINCT FROM v_key.issuer
+     OR v_claims->>'audience' IS DISTINCT FROM v_key.audience
+     OR v_claims->>'deployment_id' IS DISTINCT FROM v_key.deployment_id
+     OR v_claims->>'database_oid' IS DISTINCT FROM v_database_oid
+     OR v_claims->>'backend_pid' IS DISTINCT FROM pg_backend_pid()::text
+     OR v_claims->>'transaction_id' IS DISTINCT FROM pg_current_xact_id()::text
+     OR v_issued_at > v_now + interval '30 seconds'
+     OR v_expires_at <= v_now
+     OR v_expires_at <= v_issued_at
+     OR v_expires_at - v_issued_at > interval '60 seconds' THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_claims;
+EXCEPTION WHEN OTHERS THEN
+  -- Malformed tokens and invalid claim encodings fail closed.
+  RETURN NULL;
+END
+$verify$;
+
+CREATE FUNCTION qembed_crypto.current_tenant_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $tenant$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'tenant_id')::uuid
+$tenant$;
+
+CREATE FUNCTION qembed_crypto.current_principal_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $principal$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'principal_id')::uuid
+$principal$;
+
+CREATE FUNCTION qembed_crypto.current_caller_id()
+RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto, pg_temp
+AS $caller$
+  SELECT (qembed_crypto.verified_context(
+    current_setting('app.context_token', true)
+  )->>'caller_id')::uuid
+$caller$;
+
+REVOKE ALL ON SCHEMA qembed_crypto FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA qembed_crypto FROM PUBLIC, qembed_runtime;
+REVOKE ALL ON FUNCTION qembed_crypto.verified_context(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_tenant_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_principal_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION qembed_crypto.current_caller_id() FROM PUBLIC;
+GRANT USAGE ON SCHEMA qembed_crypto TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.verified_context(text) TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_tenant_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_principal_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_caller_id() TO qembed_runtime;
+
+CREATE TABLE qembed_crypto.tenant_rows (
+  tenant_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+INSERT INTO qembed_crypto.tenant_rows
+SELECT CASE WHEN n <= 5
+  THEN '10000000-0000-0000-0000-000000000001'::uuid
+  ELSE '10000000-0000-0000-0000-000000000002'::uuid END, n
+FROM generate_series(1, 10) AS g(n);
+ALTER TABLE qembed_crypto.tenant_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.tenant_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
+  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
+
+     OR v_claims->>'key_id' IS DISTINCT FROM v_key.key_id THEN
     RETURN NULL;
   END IF;
 
