@@ -34,8 +34,21 @@ jobs:
         run: |
           docker exec --user root qembed-pg19 bash -euxc '
             apt-get update
-            apt-get install -y --no-install-recommends build-essential ca-certificates libsodium-dev postgresql-server-dev-19 curl unzip
+            apt-get install -y --no-install-recommends build-essential ca-certificates libsodium-dev postgresql-server-dev-19 curl
             test "$(pg_config --version | awk "{print \$2}")" = "19.0"
+            # pgsodium 3.1.11 adds ipcrypt APIs requiring libsodium 1.0.22.
+            # Debian Bookworm ships 1.0.18, so build the signed upstream libsodium tag.
+            curl --fail --location --retry 3 \
+              https://codeload.github.com/jedisct1/libsodium/tar.gz/77e1ce5d6dee871c49ef211222ba18ef0c486bda \
+              --output /tmp/libsodium-1.0.22.tar.gz
+            mkdir -p /tmp/libsodium-src
+            tar -xzf /tmp/libsodium-1.0.22.tar.gz --strip-components=1 -C /tmp/libsodium-src
+            cd /tmp/libsodium-src
+            ./configure --prefix=/usr/local --disable-static
+            make -j2
+            make install
+            ldconfig
+            cd /
             curl --fail --location --retry 3 \
               https://codeload.github.com/michelp/pgsodium/tar.gz/a8b8a2739bab1f7a07445b1c911e2bd1abf67784 \
               --output /tmp/pgsodium-3.1.11.tar.gz
