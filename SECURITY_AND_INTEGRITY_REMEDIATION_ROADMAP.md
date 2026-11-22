@@ -113,7 +113,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 - [x] State explicitly whether arbitrary SQL execution under `qembed_runtime` is inside or outside the database threat model: it is in scope for cross-tenant/Principal/Caller identity forgery.
 - [x] Record the consequence: current GUC-driven RLS protects against application mistakes, not arbitrary SQL execution as the runtime role.
 - [x] Select a trusted signed transaction-context boundary; the project owner accepted RT-050 as the remediation direction. Production implementation and rollout remain pending.
-- [x] Run the current-risk regression probe on PostgreSQL 19 + pgvector 0.8.7: SQL PR #70 workflow [#45050465672](https://github.com/qembed/qembed-sql/actions/runs/45050465672), 442/442 passed. This confirms the current vulnerability is reproducible; it does not close QSA-003.
+- [x] Run the current-risk regression probe on PostgreSQL 19 + pgvector 0.8.7: SQL PR #70 workflow [#45050613826](https://github.com/qembed/qembed-sql/actions/runs/45050613826), 442/442 passed. This confirms the current vulnerability is reproducible; it does not close QSA-003.
 - [ ] Replace every canonical SQL RLS/function identity read with verified token accessors; remove legacy GUC fallback and `app.caller_id` writes.
 - [ ] Migrate all Rust repository transaction entry points to the signed-context transaction API; redesign the pre-token delegation resolver so it validates explicit trusted inputs and does not establish RLS identity through GUCs.
 - [ ] Add inverted negative tests proving forged legacy GUCs do not change effective identity under the actual runtime role; retain positive tenant/Principal/Caller behavior.
