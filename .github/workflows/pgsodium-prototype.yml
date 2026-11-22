@@ -7,6 +7,7 @@ on:
       - ".github/workflows/pgsodium-prototype.yml"
       - "tests/pgsodium_pg19_probe.sql"
       - "tests/rt050_transaction_binding_probe.sql"
+      - "docs/QSA-003_RT050_TRANSACTION_BINDING_PROBE.md"
       - "docs/QSA-003_PGSODIUM_PROTOTYPE.md"
   workflow_dispatch:
 
