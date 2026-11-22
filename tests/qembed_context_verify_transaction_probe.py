@@ -138,7 +138,6 @@ def main():
     connection = connect()
     cursor = connection.cursor()
     try:
-        cursor.execute("BEGIN")
         payload, signature, claims = issue_token(cursor, sign)
         cursor.execute(
             "SELECT set_config('app.context_payload', %s, true), "
@@ -201,7 +200,6 @@ def main():
         connection.commit()
 
         # A committed token must fail in the next transaction on the same backend.
-        cursor.execute("BEGIN")
         cursor.execute("SET ROLE qembed_runtime")
         if verify(cursor, payload, signature) is not None:
             raise AssertionError("committed token replayed in the next transaction")
@@ -209,14 +207,12 @@ def main():
         connection.commit()
 
         # A token from a rolled-back transaction must fail in the following transaction.
-        cursor.execute("BEGIN")
         rollback_payload, rollback_signature, rollback_claims = issue_token(cursor, sign)
         cursor.execute("SET ROLE qembed_runtime")
         if verify(cursor, rollback_payload, rollback_signature) != rollback_claims:
             raise AssertionError("valid token in rollback test transaction was rejected")
         cursor.execute("RESET ROLE")
         connection.rollback()
-        cursor.execute("BEGIN")
         cursor.execute("SET ROLE qembed_runtime")
         if verify(cursor, rollback_payload, rollback_signature) is not None:
             raise AssertionError("rolled-back token replayed in the next transaction")
@@ -226,7 +222,6 @@ def main():
         # A second backend must reject the original committed token.
         other = connect()
         other_cursor = other.cursor()
-        other_cursor.execute("BEGIN")
         other_cursor.execute("SET ROLE qembed_runtime")
         if verify(other_cursor, payload, signature) is not None:
             raise AssertionError("token from another backend was accepted")
@@ -236,7 +231,7 @@ def main():
         other.close()
 
         # pg_current_xact_id() and the signed context must work in READ ONLY.
-        cursor.execute("BEGIN READ ONLY")
+        connection.set_session(readonly=True)
         read_only_payload, read_only_signature, read_only_claims = issue_token(cursor, sign)
         cursor.execute(
             "SELECT set_config('app.context_payload', %s, true), "
