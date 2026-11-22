@@ -25,7 +25,7 @@ CREATE TABLE qembed_crypto.verification_keys (
   CHECK (
     (status = 'active' AND retired_at IS NULL AND verify_until IS NULL AND revoked_at IS NULL)
     OR
-    (status = 'retired' AND retired_at IS NOT NULL AND verify_until > retired_at AND revoked_at IS NULL)
+    (status = 'retired' AND retired_at IS NOT NULL AND verify_until IS NOT NULL AND verify_until > retired_at AND revoked_at IS NULL)
     OR
     (status = 'revoked' AND revoked_at IS NOT NULL)
   )
@@ -65,9 +65,9 @@ BEGIN
   IF NEW.status = OLD.status THEN
     RAISE EXCEPTION 'verification key lifecycle state cannot be rewritten in place';
   ELSIF OLD.status = 'active' AND NEW.status = 'retired' THEN
-    IF NEW.retired_at IS NULL OR NEW.verify_until < NEW.retired_at + interval '120 seconds'
+    IF NEW.retired_at IS NULL OR NEW.verify_until IS NULL OR NEW.verify_until < NEW.retired_at + interval '120 seconds'
        OR NEW.revoked_at IS NOT NULL THEN
-      RAISE EXCEPTION 'retirement requires at least 90 seconds of verification grace';
+      RAISE EXCEPTION 'retirement requires at least 120 seconds of verification grace';
     END IF;
   ELSIF OLD.status = 'active' AND NEW.status = 'revoked' THEN
     IF NEW.revoked_at IS NULL OR NEW.retired_at IS NOT NULL OR NEW.verify_until IS NOT NULL THEN
