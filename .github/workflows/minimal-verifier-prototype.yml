@@ -7,6 +7,7 @@ on:
       - ".github/workflows/minimal-verifier-prototype.yml"
       - "extensions/qembed_context_verify/**"
       - "tests/qembed_context_verify_pg19_probe.sql"
+      - "docs/QSA-003_MINIMAL_VERIFIER_PROTOTYPE.md"
   workflow_dispatch:
 
 jobs:
