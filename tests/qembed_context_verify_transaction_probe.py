@@ -364,6 +364,29 @@ def main():
         if tuple(str(value) for value in cursor.fetchone()) != (TENANT_A, PRINCIPAL, CALLER):
             raise AssertionError("typed claim accessors returned incorrect signed identities")
 
+        # A valid v1 token may carry explicit JSON null for Caller. The
+        # tenant and Principal remain authenticated, while Caller-scoped access
+        # is absent rather than inferred.
+        _, _, principal_only_claims, principal_only_token = issue_token(
+            cursor, sign, {"caller_id": None}
+        )
+        if principal_only_claims["caller_id"] is not None:
+            raise AssertionError("Principal-only issuer did not encode JSON null Caller")
+        verified_principal_only = verify(cursor, principal_only_token)
+        if verified_principal_only is None or verified_principal_only.get("caller_id", "missing") is not None:
+            raise AssertionError("PostgreSQL rejected a valid Principal-only context")
+        cursor.execute(
+            "SELECT set_config('app.context_token', %s, true)",
+            (principal_only_token,),
+        )
+        cursor.execute("SELECT qembed_crypto.current_caller_id()")
+        if cursor.fetchone()[0] is not None:
+            raise AssertionError("Principal-only context must expose SQL NULL Caller")
+        cursor.execute("SELECT qembed_crypto.current_tenant_id(), qembed_crypto.current_principal_id()")
+        if tuple(str(value) for value in cursor.fetchone()) != (TENANT_A, PRINCIPAL):
+            raise AssertionError("Principal-only context lost its tenant or Principal identity")
+        cursor.execute("SELECT set_config('app.context_token', %s, true)", (token,))
+
         cursor.execute(
             "SELECT count(*), bool_and(tenant_id = %s::uuid) "
             "FROM qembed_crypto.tenant_rows",
