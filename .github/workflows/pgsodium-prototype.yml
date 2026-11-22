@@ -57,6 +57,17 @@ jobs:
             make -C /tmp/pgsodium-src PG_CONFIG="$(command -v pg_config)"
             make -C /tmp/pgsodium-src PG_CONFIG="$(command -v pg_config)" install
           '
+      - name: Restart PostgreSQL to load libsodium 1.0.22
+        run: |
+          docker restart qembed-pg19
+          for attempt in $(seq 1 60); do
+            if docker exec qembed-pg19 pg_isready -U postgres -d postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs qembed-pg19
+          exit 1
       - name: Verify Ed25519 API and least-privilege execution
         run: |
           docker cp tests/pgsodium_pg19_probe.sql qembed-pg19:/tmp/pgsodium_pg19_probe.sql
