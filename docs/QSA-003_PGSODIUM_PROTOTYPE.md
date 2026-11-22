@@ -6,7 +6,8 @@ RT-050 requires an asymmetric verifier inside PostgreSQL while the signing priva
 
 References:
 - PGXN release 3.1.11 (2026-06-10): https://www.pgxn.org/dist/pgsodium/3.1.11/  
-- Exact source commit: https://github.com/michelp/pgsodium/commit/a8b8a2739bab1f7a07445b1c911e2bd1abf67784  
+- Exact pgsodium source commit: https://github.com/michelp/pgsodium/commit/a8b8a2739bab1f7a07445b1c911e2bd1abf67784  
+- libsodium 1.0.22 signed tag: https://github.com/jedisct1/libsodium/releases/tag/1.0.22  
 - Unsigned tag metadata: https://github.com/michelp/pgsodium/releases/tag/v3.1.11  
 - Issue #127 disposition (closed by maintainer): https://github.com/michelp/pgsodium/issues/127
 - pgsodium API documentation: https://github.com/michelp/pgsodium
@@ -14,11 +15,11 @@ References:
 
 ## Pinned source and provenance caveat
 
-The build uses the exact source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784`, referenced by tag `v3.1.11`. GitHub reports that annotated tag as **unsigned**. An issue (#127) that requested signed release provenance was closed by the maintainer, who characterized the request as AI spam; it is not evidence of an upstream security commitment or response. Pinning the commit makes the experiment reproducible but does not authenticate who published it. Before production adoption, independently verify the source and build provenance or choose a distribution process with an authenticated chain of custody.
+The build uses the exact pgsodium source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784`, referenced by tag `v3.1.11`. GitHub reports that annotated tag as **unsigned**. The first build attempt exposed an additional dependency detail: pgsodium 3.1.11's new ipcrypt source uses libsodium 1.0.22 symbols, while Debian Bookworm supplies 1.0.18. The prototype now builds libsodium 1.0.22 from commit `77e1ce5d6dee871c49ef211222ba18ef0c486bda`; GitHub reports the corresponding `1.0.22` tag signature as valid. This verifies the dependency version and provides a stronger provenance chain for libsodium, but does not resolve pgsodium's unsigned tag. An issue (#127) that requested signed release provenance was closed by the maintainer, who characterized the request as AI spam; it is not evidence of an upstream security commitment or response. Pinning the commit makes the experiment reproducible but does not authenticate who published it. Before production adoption, independently verify the source and build provenance or choose a distribution process with an authenticated chain of custody.
 
 ## What CI proves
 
-The dedicated workflow builds the pinned PGXN 3.1.11 source against the PostgreSQL 19 server headers in the same PostgreSQL 19 / pgvector 0.8.7 image used by the SQL smoke suite. It then:
+The dedicated workflow builds the pinned pgsodium 3.1.11 source against PostgreSQL 19 server headers in the same PostgreSQL 19 / pgvector 0.8.7 image used by the SQL smoke suite. It first builds libsodium 1.0.22 because the distribution's Bookworm package (1.0.18) is too old for pgsodium 3.1.11's ipcrypt implementation. It then:
 1. installs and creates the extension;
 2. creates an Ed25519 keypair and verifies a valid signature;
 3. rejects a modified message;
