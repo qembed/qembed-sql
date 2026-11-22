@@ -968,6 +968,18 @@ CREATE POLICY signed_tenant_policy ON qembed_crypto.tenant_rows
   USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
 GRANT SELECT ON qembed_crypto.tenant_rows TO qembed_runtime;
 
+-- Caller-scoped rows model episodic-memory visibility. A Principal-only token
+-- must not acquire Caller visibility through a fallback.
+CREATE TABLE qembed_crypto.caller_rows (
+  caller_id uuid NOT NULL,
+  row_id integer NOT NULL
+);
+ALTER TABLE qembed_crypto.caller_rows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qembed_crypto.caller_rows FORCE ROW LEVEL SECURITY;
+CREATE POLICY signed_caller_policy ON qembed_crypto.caller_rows
+  USING (caller_id = (SELECT qembed_crypto.current_caller_id()));
+GRANT SELECT ON qembed_crypto.caller_rows TO qembed_runtime;
+
      OR v_claims->>'principal_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
   SELECT oid::text INTO STRICT v_database_oid
