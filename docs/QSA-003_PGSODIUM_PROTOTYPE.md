@@ -8,6 +8,7 @@ References:
 - PGXN release 3.1.11 (2026-06-10): https://www.pgxn.org/dist/pgsodium/3.1.11/  
 - Exact pgsodium source commit: https://github.com/michelp/pgsodium/commit/a8b8a2739bab1f7a07445b1c911e2bd1abf67784  
 - libsodium 1.0.22 signed tag: https://github.com/jedisct1/libsodium/releases/tag/1.0.22  
+- Verified pgsodium source commit: https://github.com/michelp/pgsodium/commit/a8b8a2739bab1f7a07445b1c911e2bd1abf67784  
 - Unsigned tag metadata: https://github.com/michelp/pgsodium/releases/tag/v3.1.11  
 - Issue #127 disposition (closed by maintainer): https://github.com/michelp/pgsodium/issues/127
 - pgsodium API documentation: https://github.com/michelp/pgsodium
@@ -15,7 +16,7 @@ References:
 
 ## Pinned source and provenance caveat
 
-The build uses the exact pgsodium source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784`, referenced by tag `v3.1.11`. GitHub reports that annotated tag as **unsigned**. The first build attempt exposed an additional dependency detail: pgsodium 3.1.11's new ipcrypt source uses libsodium 1.0.22 symbols, while Debian Bookworm supplies 1.0.18. The prototype now builds libsodium 1.0.22 from commit `77e1ce5d6dee871c49ef211222ba18ef0c486bda`; GitHub reports the corresponding `1.0.22` tag signature as valid. The server is restarted after installing it because PostgreSQL had already loaded the older shared library when the container started. This verifies the dependency version and provides a stronger provenance chain for libsodium, but does not resolve pgsodium's unsigned tag. An issue (#127) that requested signed release provenance was closed by the maintainer, who characterized the request as AI spam; it is not evidence of an upstream security commitment or response. Pinning the commit makes the experiment reproducible but does not authenticate who published it. Before production adoption, independently verify the source and build provenance or choose a distribution process with an authenticated chain of custody.
+The build downloads pgsodium from exact source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784`. GitHub reports the **commit signature as valid**, while the annotated `v3.1.11` tag object itself is unsigned. Because the workflow downloads the archive by commit SHA (not by tag or mutable branch), the source used by CI is bound to the verified commit. There is no separately verified signature on a prebuilt pgsodium release artifact in this prototype; production builds should continue to pin and verify the signed source commit or use an authenticated package process. The first build attempt exposed an additional dependency detail: pgsodium 3.1.11's new ipcrypt source uses libsodium 1.0.22 symbols, while Debian Bookworm supplies 1.0.18. The prototype builds libsodium 1.0.22 from commit `77e1ce5d6dee871c49ef211222ba18ef0c486bda`; GitHub reports the corresponding `1.0.22` tag signature as valid. The server is restarted after installing it because PostgreSQL had already loaded the older shared library when the container started. An issue (#127) that requested signed release provenance was closed by the maintainer as AI spam; it is not evidence of an upstream security commitment or response.
 
 ## What CI proves
 
