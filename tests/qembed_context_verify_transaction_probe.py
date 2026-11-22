@@ -398,7 +398,13 @@ def main():
             "has_function_privilege(current_user, "
             "'qembed_crypto.list_verification_keys(text)', 'EXECUTE'), "
             "has_function_privilege(current_user, "
-            "'qembed_crypto.get_key_lifecycle_operation(uuid)', 'EXECUTE')"
+            "'qembed_crypto.get_key_lifecycle_operation(uuid)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.list_pending_key_audit_exports(integer)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.mark_key_audit_exported(bigint,text)', 'EXECUTE'), "
+            "has_function_privilege(current_user, "
+            "'qembed_crypto.record_key_audit_export_failure(bigint,text)', 'EXECUTE')"
         )
         privileges = cursor.fetchone()
         if any(privileges):
