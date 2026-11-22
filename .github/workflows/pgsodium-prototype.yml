@@ -1,12 +1,6 @@
 name: QSA-003 pgsodium PostgreSQL 19 prototype
 
 on:
-  push:
-    branches: [prototype/qsa003-pgsodium-pg19]
-    paths:
-      - ".github/workflows/pgsodium-prototype.yml"
-      - "tests/pgsodium_pg19_probe.sql"
-      - "docs/QSA-003_PGSODIUM_PROTOTYPE.md"
   pull_request:
     branches: [master]
     paths:
