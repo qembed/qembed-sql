@@ -20,23 +20,37 @@ The build downloads pgsodium from exact source commit `a8b8a2739bab1f7a07445b1c9
 
 ## What CI proves
 
-The dedicated workflow builds the pinned pgsodium 3.1.11 source against PostgreSQL 19 server headers in the same PostgreSQL 19 / pgvector 0.8.7 image used by the SQL smoke suite. It first builds libsodium 1.0.22 because the distribution's Bookworm package (1.0.18) is too old for pgsodium 3.1.11's ipcrypt implementation. It then:
+The dedicated workflow builds the pinned pgsodium 3.1.11 source against PostgreSQL 19 server headers in the PostgreSQL 19 / pgvector 0.8.7 image. It builds libsodium 1.0.22, verifies the pgsodium link resolves `libsodium.so.26`, and then configures pgsodium in `shared_preload_libraries`.
+
+The preload is necessary for pgsodium to define `pgsodium.enable_event_trigger`; without it, pgsodium's DDL event trigger fails during later table creation because the setting is unknown. Preload also requires a getkey script and loads a root key into PostgreSQL server memory. CI uses `tests/pgsodium_getkey_test.sh` to create an ephemeral key inside the disposable container. This is a test fixture, not a production key-management recommendation.
+
+The workflow then:
 1. installs and creates the extension;
-2. creates an Ed25519 keypair and verifies a valid signature;
-3. rejects a modified message;
+2. creates an Ed25519 keypair and verifies a valid detached signature;
+3. rejects a modified signature/message;
 4. removes PUBLIC execute access to pgsodium functions;
 5. grants the runtime role only schema USAGE and EXECUTE on the detached verifier;
-6. verifies that the runtime role can verify, but cannot sign or generate keypairs.
+6. verifies that the runtime role can verify, but cannot sign or generate keypairs;
+7. verifies a test-only signed context bound to backend PID, transaction ID, database OID and provisioned deployment/audience;
+8. rejects wrong backend/database/deployment, expiry, altered signature, and replay after commit, rollback, or use from another backend;
+9. confirms savepoint rollback preserves the outer transaction context and `pg_current_xact_id()` works in a `READ ONLY` transaction;
+10. compares test-only RLS policies using a direct verifier helper and an uncorrelated scalar subquery that plans as an `InitPlan`.
 
-This is a build/API/ACL feasibility probe only. It does not validate RT-050's transaction binding, key rotation, verifier ownership model, issuer, or pool lifecycle.
+The RLS microbenchmark scanned 10,000 rows (5,000 visible to the signed tenant) without a tenant index. Direct verification in the policy took 855.463 ms and 30,064 shared buffer hits; the `InitPlan` form took 1.143 ms and 67 shared buffer hits. This is a CI microbenchmark, not a production performance guarantee. It shows that production RLS policy design must preserve one context verification per statement, not repeat Ed25519 verification for each scanned row.
+
+The tested code passed [prototype workflow run #35](https://github.com/qembed/qembed-sql/actions/runs/45021654908) and [SQL smoke run #253](https://github.com/qembed/qembed-sql/actions/runs/45021654841) on commit `a90f5e16cf04a47477f2a196d4b50d1c5b15b181`.
+
+This remains a feasibility probe only. It does not validate a real Context Issuer, Rust transaction API, production RLS migration, cross-cluster replay with two real clusters, Caller delegation/revocation races, key rotation/revocation, issuer outage, retry orchestration, or actual connection-pool lifecycle.
 
 ## Important deployment and trust questions still open
 
 - pgsodium is a native C extension loaded into the PostgreSQL server process. Its source, release provenance, build flags, binary packages, and update policy become part of the database trusted computing base.
 - The general PostgreSQL 14+ statement does not establish an explicit upstream PostgreSQL 19 support commitment. This CI probe gives reproducible evidence for this exact image/build, not vendor certification.
 - The probe intentionally revokes PUBLIC execute and grants one verifier function. Production must validate the extension's full ACL/default-privilege behavior, function owner, schema owner, extension update scripts, and any functions requiring elevated roles.
-- No pgsodium secret-key management feature is needed for RT-050 if PostgreSQL stores only public verification keys. Do not enable or expose signing/key-generation functions to `qembed_runtime`.
+- The Ed25519 verifier itself uses public verification keys and does not need a signing key. However, preloading this pgsodium build also requires a getkey script and loads a server root key into memory. Production must explicitly decide whether this additional root-key lifecycle is acceptable and how it will be provisioned, protected, rotated and recovered.
+- Do not grant signing or key-generation functions to `qembed_runtime`.
 - The project must still decide whether to vendor/build the extension, use a maintained distribution package, or choose a separately audited verifier.
+- The RLS `InitPlan` pattern must be checked against actual production policies and representative data/indexes; the CI result is not a substitute for a production workload benchmark.
 
 ## Additional transaction-binding constraint
 
