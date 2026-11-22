@@ -17,6 +17,11 @@ DO $roles$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $roles$;
 
+DO $roles$ BEGIN
+  CREATE ROLE qembed_key_audit_exporter LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $roles$;
+
 CREATE SCHEMA qembed_crypto AUTHORIZATION CURRENT_USER;
 GRANT USAGE, CREATE ON SCHEMA qembed_crypto TO qembed_key_registry_owner;
 CREATE EXTENSION qembed_context_verify WITH SCHEMA qembed_crypto;
@@ -56,6 +61,23 @@ CREATE TABLE qembed_crypto.key_lifecycle_audit (
   approver_subject text,
   reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 1024),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE TABLE qembed_crypto.key_lifecycle_audit_outbox (
+  event_id bigint PRIMARY KEY REFERENCES qembed_crypto.key_lifecycle_audit(event_id),
+  delivery_status text NOT NULL DEFAULT 'pending'
+    CHECK (delivery_status IN ('pending', 'delivered')),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  delivered_at timestamptz,
+  sink_receipt text,
+  attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  last_attempt_at timestamptz,
+  last_error text,
+  CHECK (
+    (delivery_status = 'pending' AND delivered_at IS NULL AND sink_receipt IS NULL)
+    OR
+    (delivery_status = 'delivered' AND delivered_at IS NOT NULL AND sink_receipt IS NOT NULL)
+  )
 );
 
 -- Key identity/material is immutable. Production lifecycle is staged -> active
