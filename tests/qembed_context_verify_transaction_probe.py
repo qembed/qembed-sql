@@ -163,14 +163,40 @@ def main():
         if can_read_keys or can_insert_keys or can_read_audit or not can_stage:
             raise AssertionError("control plane must use narrow management functions, not direct table access")
 
-        for staged_key_id in (KEY_ID, STAGED_KEY_ID):
+        primary_stage_request_id = str(uuid.uuid4())
+        cursor.execute(
+            "SELECT qembed_crypto.stage_verification_key(%s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                KEY_ID, Binary(public_key), ISSUER, audience, DEPLOYMENT,
+                "operator:test-operator", primary_stage_request_id, "test-only key staging",
+            ),
+        )
+        # Repeating the same request ID and payload is idempotent.
+        cursor.execute(
+            "SELECT qembed_crypto.stage_verification_key(%s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                KEY_ID, Binary(public_key), ISSUER, audience, DEPLOYMENT,
+                "operator:test-operator", primary_stage_request_id, "test-only key staging",
+            ),
+        )
+        cursor.execute(
+            "SELECT qembed_crypto.stage_verification_key(%s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                STAGED_KEY_ID, Binary(public_key), ISSUER, audience, DEPLOYMENT,
+                "operator:test-operator", str(uuid.uuid4()), "test-only staged key",
+            ),
+        )
+        try:
             cursor.execute(
-                "SELECT qembed_crypto.stage_verification_key(%s, %s, %s, %s, %s, %s, %s, %s)",
+                "SELECT qembed_crypto.activate_verification_key(%s, %s, %s, %s, %s)",
                 (
-                    staged_key_id, Binary(public_key), ISSUER, audience, DEPLOYMENT,
-                    "operator:test-operator", str(uuid.uuid4()), "test-only key staging",
+                    STAGED_KEY_ID, "operator:same-subject", "operator:same-subject",
+                    str(uuid.uuid4()), "same-subject activation must fail",
                 ),
             )
+            raise AssertionError("key activation must require a distinct approver")
+        except psycopg2.errors.RaiseException:
+            pass
 
         try:
             cursor.execute(
@@ -191,6 +217,19 @@ def main():
             ),
         )
         cursor.execute("RESET SESSION AUTHORIZATION")
+        cursor.execute(
+            "SELECT event_id FROM qembed_crypto.key_lifecycle_audit ORDER BY event_id LIMIT 1"
+        )
+        audit_event_id = cursor.fetchone()[0]
+        try:
+            cursor.execute(
+                "UPDATE qembed_crypto.key_lifecycle_audit SET reason = 'tampered' "
+                "WHERE event_id = %s",
+                (audit_event_id,),
+            )
+            raise AssertionError("key lifecycle audit must be append-only")
+        except psycopg2.errors.RaiseException:
+            pass
     admin.close()
 
     connection = connect()
