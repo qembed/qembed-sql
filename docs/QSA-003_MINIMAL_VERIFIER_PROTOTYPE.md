@@ -29,25 +29,29 @@ In run #13, the 10,000-row primitive fixture measured 7.280 ms for direct C veri
 
 ### Full transaction-bound context probe
 
-A separate Python test issuer uses ctypes/libsodium outside PostgreSQL to generate an Ed25519 keypair and sign the exact JSON payload bytes. The private key remains in the test issuer process; only the public key is inserted into a private verification-key table. PostgreSQL parses the signed JSON only after the C function verifies the original bytes.
+A separate external Python test issuer uses libsodium to generate an Ed25519 keypair and signs the exact UTF-8 JSON bytes produced by an RFC 8785 JCS implementation. This replaces the earlier `json.dumps(sort_keys=True)` approximation, which is not a general RFC 8785 implementation. The private key remains in the issuer process; only the public key is inserted into a private verification-key table.
 
-The test-only SQL verifier checks:
+The test issuer now emits the same wire envelope as Rust:
 
-- issuer, audience, key ID and deployment ID;
-- database OID, backend PID and `pg_current_xact_id()`;
-- issue/expiry time and a maximum 60-second validity interval;
-- signature validity and an 8 KiB payload bound.
+`app.context_token = qctx1:<payload-hex>:<signature-hex>`
 
-The external-issuer integration test passed valid claims and rejected modified signatures, wrong backend, wrong transaction, wrong database, wrong deployment/audience, wrong issuer, expired tokens, replay after COMMIT, replay after ROLLBACK, and replay from another backend. It also verified that savepoint rollback preserves the outer transaction context and that a `READ ONLY` transaction can obtain an XID and use the signed context.
+The SQL verifier:
+- rejects unknown envelope versions, malformed/lowercase-hex violations, invalid signature lengths and payloads above 8 KiB;
+- uses the untrusted `key_id` only to locate a candidate public key, verifies the signature over the original payload bytes, and trusts no claim until verification succeeds;
+- validates all version-1 required string claims, UUID syntax, issuer, audience, key ID, deployment ID, database OID, backend PID, transaction ID, issue/expiry times and the 60-second maximum lifetime;
+- exposes typed tenant, Principal and Caller accessors;
+- reads authorization context only from `app.context_token`.
 
-RLS returned only the signed tenant's rows even after the test runtime forged the legacy `app.tenant_id`, `app.principal_id`, and `app.caller_id` GUCs. The runtime could execute the SECURITY DEFINER context verifier but could neither read the verification-key table nor invoke the low-level C function directly.
+The integration test also attempts to install the maximum-size token envelope to verify PostgreSQL GUC capacity for the documented 8 KiB payload limit. If PostgreSQL rejects that value, the protocol's hex envelope and payload bound must be revisited together with the Rust issuer; do not silently truncate or switch encodings.
 
-This is an external Python issuer simulation, not the final Rust ContextIssuer. The token format, SQL contract and transaction semantics are now exercised end-to-end without pgsodium, but production integration is still pending.
+The test rejects modified payload/signature, unknown envelope version, wrong backend/transaction/database/deployment/issuer/version, expired tokens, replay after COMMIT/ROLLBACK and replay from another backend. It verifies savepoint rollback, read-only transactions, typed claim accessors, least privilege, and RLS isolation despite forged legacy identity GUCs.
+
+This is still an external test issuer, not an invocation of the Rust `ContextIssuer` itself. The use of RFC 8785 in Python tests exercises the same canonicalization standard but does not replace a Rust-to-PostgreSQL integration test using `serde_jcs`.
 
 ## Limitations and remaining gates
 
 - This is new Qembed-maintained native C code and needs independent security review, fuzzing, ABI/build provenance, a supported PostgreSQL matrix, and packaging/update policy.
-- The Python issuer is a test harness; the Rust signing component, key storage/KMS/HSM integration, canonical token contract, and Rust connection-pool lifecycle are not implemented.
+- The Python issuer is a test harness; key storage/KMS/HSM integration and the Rust connection-pool lifecycle are not tested end-to-end here.
 - No real second-cluster replay test, key rotation/revocation, Caller delegation/revocation race, issuer outage, retry orchestration, or pool reuse test is included.
 - The RLS policies are test fixtures, not production policies. Production RLS migration and representative workload benchmarking remain required.
 - The prototype is in `qembed-sql` only for evaluation; if adopted, extension source/package ownership and release lifecycle must be decided explicitly.
@@ -57,4 +61,4 @@ Compare this branch with [the pgsodium prototype PR #68](https://github.com/qemb
 ## Validation evidence
 
 - [Minimal verifier workflow run #14](https://github.com/qembed/qembed-sql/actions/runs/45024432606) passed on PostgreSQL 19 / pgvector 0.8.7 using Debian Bookworm libsodium 1.0.18.
-- [SQL smoke run #291](https://github.com/qembed/qembed-sql/actions/runs/45024432592) passed on the same code head.
+- [SQL smoke run #291](https://github.com/qembed/qembed-sql/actions/runs/45024432592) passed on the earlier prototype head. The new qctx1/JCS contract requires a fresh workflow run before it can be considered validated.
