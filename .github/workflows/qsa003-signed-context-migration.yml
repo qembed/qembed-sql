@@ -2,7 +2,7 @@ name: QSA-003 signed-context canonical RLS migration
 
 on:
   push:
-    branches: [feat/qsa003-signed-context-rls]
+    branches: [feat/qsa003-signed-context-rls, prototype/qsa003-minimal-ed25519-verifier]
     paths:
       - ".github/workflows/qsa003-signed-context-migration.yml"
       - "migrations/rt050_signed_context_rls.sql"
