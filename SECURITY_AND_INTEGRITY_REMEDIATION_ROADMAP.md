@@ -102,19 +102,24 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `DOCUMENTED_RISK` — [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) explicitly states that the identity GUCs are session-settable and forgeable by arbitrary SQL under `qembed_runtime`. The project owner selected a signed transaction-context direction; a parked, unmerged design plan is recorded on branch [`architecture/rt-050-signed-transaction-context`](https://github.com/qembed/qembed-sql/tree/architecture/rt-050-signed-transaction-context) in `ADR_RT-050_Cryptographically_Verified_Transaction_Context.md`. This is a design decision only: the current GUC trust gap remains open until PostgreSQL 19 verification and the Rust/SQL contract are prototyped, tested and deployed.
+**Current status:** `IN_PROGRESS` — the project owner selected the signed transaction-context remediation. [Consumer map and migration contract](docs/QSA-003_LEGACY_GUC_CONSUMER_MAP.md) records every current SQL consumer and the Rust bootstrap path. [Regression probe](tests/26_qsa003_legacy_guc_boundary.sql) demonstrates the current tenant, Principal and Caller GUC forgery paths as `qembed_runtime`; CI evidence is pending. SQL PR #69 and Rust PR #93 remain Draft feasibility/integration work, not production migration.
 
 **Reported behavior:** `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session settings writable by the runtime role. Under arbitrary SQL execution as `qembed_runtime`, a caller can forge context and bypass the intended delegation boundary, including episodic-memory isolation.
 
-**Required work**
-- [ ] Map every identity/security decision derived from these GUCs and every function that sets or consumes them.
-- [ ] State explicitly whether arbitrary SQL execution under `qembed_runtime` is inside or outside the database threat model.
-- [ ] Record the consequences: RLS driven by caller-writable GUCs is tenant isolation against application mistakes, not an independent boundary against SQL execution as that role.
-- [ ] Evaluate mitigations that do not silently change the Rust transaction contract (for example, narrower database roles or a trusted context-establishment boundary).
-- [ ] Add tests that demonstrate the current boundary and prevent documentation from claiming stronger isolation than is actually provided.
-- [ ] Obtain an explicit owner decision: remediation design or `ACCEPTED_RISK` with rationale.
+**Threat-model decision:** arbitrary SQL execution under `qembed_runtime` is in scope for preventing cross-tenant, Principal and Caller identity forgery. The selected signed context does not claim to protect against compromise of the trusted application/Context Issuer, misuse within the identity scope already legitimately issued, or PostgreSQL superuser/host compromise. Parameterized SQL and least privilege remain mandatory.
 
-**Acceptance:** the threat model is explicit, technically accurate, and approved. This item cannot be closed merely by adding prose while product/security claims still imply GUCs are unforgeable.
+**Required work**
+- [x] Map every identity/security decision derived from the three GUCs and every SQL function that sets or consumes them. See `docs/QSA-003_LEGACY_GUC_CONSUMER_MAP.md`.
+- [x] State explicitly whether arbitrary SQL execution under `qembed_runtime` is inside or outside the database threat model: it is in scope for cross-tenant/Principal/Caller identity forgery.
+- [x] Record the consequence: current GUC-driven RLS protects against application mistakes, not arbitrary SQL execution as the runtime role.
+- [x] Select a trusted signed transaction-context boundary; the project owner accepted RT-050 as the remediation direction. Production implementation and rollout remain pending.
+- [ ] Run the new current-risk regression probe on PostgreSQL 19 + pgvector 0.8.7 and record the exact CI evidence.
+- [ ] Replace every canonical SQL RLS/function identity read with verified token accessors; remove legacy GUC fallback and `app.caller_id` writes.
+- [ ] Migrate all Rust repository transaction entry points to the signed-context transaction API; redesign the pre-token delegation resolver so it validates explicit trusted inputs and does not establish RLS identity through GUCs.
+- [ ] Add inverted negative tests proving forged legacy GUCs do not change effective identity under the actual runtime role; retain positive tenant/Principal/Caller behavior.
+- [ ] Complete PostgreSQL 19 integration, connection-pool/replay tests, independent security review, C-extension fuzzing, packaging/provenance, supported PostgreSQL matrix, representative RLS workload benchmark and deployment validation.
+
+**Acceptance:** all authorization and RLS identity decisions use only cryptographically verified, backend/transaction-bound context; arbitrary SQL under `qembed_runtime` cannot forge tenant, Principal or Caller identity; Rust uses the signed-context entry point on every tenant-scoped repository path; all negative and positive target-environment tests pass; release/security gates are evidenced. This item is not closed by documentation or the feasibility prototype alone.
 
 ### QSA-004 — Remove caller-controlled bypass of knowledge interval guards
 
