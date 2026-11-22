@@ -158,9 +158,9 @@ BEGIN
 END
 $revoke_caller_delegation$;
 
-DROP FUNCTION resolve_delegated_caller(uuid);
+DROP FUNCTION IF EXISTS resolve_delegated_caller(uuid);
 
-CREATE FUNCTION resolve_delegated_caller(p_tenant_id UUID, p_principal_id UUID, p_caller_id UUID)
+CREATE OR REPLACE FUNCTION resolve_delegated_caller(p_tenant_id UUID, p_principal_id UUID, p_caller_id UUID)
 RETURNS TABLE (delegation_id UUID, caller_id UUID, caller_kind TEXT)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
 AS $resolve_delegated_caller$
