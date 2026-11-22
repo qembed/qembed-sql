@@ -245,6 +245,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, qembed_crypto, pg_temp
 AS $stage$
 DECLARE
+  v_event_id bigint;
   v_operation text;
   v_existing_key_id text;
   v_existing_actor text;
@@ -290,7 +291,9 @@ BEGIN
   INSERT INTO qembed_crypto.key_lifecycle_audit
     (request_id, key_id, operation, prior_state, new_state, actor_subject, reason)
   VALUES
-    (p_request_id, p_key_id, 'stage', NULL, 'staged', p_actor_subject, p_reason);
+    (p_request_id, p_key_id, 'stage', NULL, 'staged', p_actor_subject, p_reason)
+  RETURNING event_id INTO v_event_id;
+  INSERT INTO qembed_crypto.key_lifecycle_audit_outbox (event_id) VALUES (v_event_id);
 END
 $stage$;
 
@@ -307,6 +310,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, qembed_crypto, pg_temp
 AS $activate$
 DECLARE
+  v_event_id bigint;
   v_operation text;
   v_existing_key_id text;
   v_existing_actor text;
@@ -359,7 +363,9 @@ BEGIN
      actor_subject, approver_subject, reason)
   VALUES
     (p_request_id, p_key_id, 'activate', 'staged', 'active',
-     p_actor_subject, p_approver_subject, p_reason);
+     p_actor_subject, p_approver_subject, p_reason)
+  RETURNING event_id INTO v_event_id;
+  INSERT INTO qembed_crypto.key_lifecycle_audit_outbox (event_id) VALUES (v_event_id);
 
   RETURN v_activated_at;
 END
@@ -379,6 +385,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, qembed_crypto, pg_temp
 AS $retire$
 DECLARE
+  v_event_id bigint;
   v_operation text;
   v_existing_key_id text;
   v_existing_actor text;
@@ -443,7 +450,9 @@ BEGIN
      actor_subject, approver_subject, reason)
   VALUES
     (p_request_id, p_key_id, 'retire', 'active', 'retired',
-     p_actor_subject, p_approver_subject, p_reason);
+     p_actor_subject, p_approver_subject, p_reason)
+  RETURNING event_id INTO v_event_id;
+  INSERT INTO qembed_crypto.key_lifecycle_audit_outbox (event_id) VALUES (v_event_id);
 
   RETURN v_verify_until;
 END
@@ -461,6 +470,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, qembed_crypto, pg_temp
 AS $revoke$
 DECLARE
+  v_event_id bigint;
   v_operation text;
   v_existing_key_id text;
   v_existing_actor text;
@@ -507,7 +517,9 @@ BEGIN
     (request_id, key_id, operation, prior_state, new_state, actor_subject, reason)
   VALUES
     (p_request_id, p_key_id, 'revoke', v_old_state, 'revoked',
-     p_actor_subject, p_reason);
+     p_actor_subject, p_reason)
+  RETURNING event_id INTO v_event_id;
+  INSERT INTO qembed_crypto.key_lifecycle_audit_outbox (event_id) VALUES (v_event_id);
 
   RETURN v_revoked_at;
 END
