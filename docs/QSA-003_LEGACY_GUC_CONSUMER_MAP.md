@@ -43,15 +43,16 @@ The canonical clean schema contains 25 direct identity-GUC read/write expression
 
 The schema has no SQL writer for `app.tenant_id` or `app.principal_id`; those values are installed by the Rust transaction wrapper. The SQL function `resolve_delegated_caller` is the identified SQL writer for `app.caller_id`.
 
-## 3. Rust transaction bootstrap and remaining legacy path
+## 3. Rust transaction bootstrap — merged application-side migration
 
-Current Rust source confirms the following sequence:
+The Rust side is no longer a Draft branch. Rust PR #93 was merged into `qembed-object-runtime/main` (merge commit `1534c3c479289dcf5a642088761f86e5656d5ae3`). The production repository path now uses the signed transaction context:
 
-1. `crates/qembed-store/src/lib.rs::begin_tenant_transaction` starts a PostgreSQL transaction and executes `set_config('app.tenant_id', $1, true)` and `set_config('app.principal_id', $2, true)` using bound parameters from trusted `Scope`.
-2. `crates/qembed-store/src/context_issuer.rs::begin_context_transaction` currently calls `begin_tenant_transaction`, reads backend PID / transaction ID / database OID, resolves the selected Caller through the SQL function, signs the exact JCS claims, and installs `app.context_token`.
-3. `crates/qembed-store/src/caller.rs::resolve_delegated_caller` invokes SQL `resolve_delegated_caller(uuid)` and binds the returned Caller to the in-process transaction token and trusted Scope.
+1. `PgContext` owns the pool and `ContextIssuer`; trusted composition code opens transactions with `begin_principal(scope)` or `begin_caller(scope, caller_id)`.
+2. The issuer binds the token to the PostgreSQL backend, transaction, database/deployment and signed claims, then installs the single transaction-local `app.context_token` envelope.
+3. Object/Snapshot repository operations require Principal context; Caller-scoped operations require an explicitly resolved and validated Caller. Caller identity is not accepted from an external DTO.
+4. Owner pre-authentication uses the narrow `owner_principals` / `owner_credentials` lookup and does not install `app.tenant_id` as a legacy identity fallback.
 
-The signed-context entry point therefore exists and is integration-tested, but the bootstrap still writes legacy tenant/Principal GUCs because the current SQL resolver reads them. Existing repository methods that call `begin_tenant_transaction` have not yet all been migrated to the signed-context entry point. This is a production migration blocker, not a documentation-only detail.
+`begin_tenant_transaction` remains exported only for compatibility/tests; current production source has no caller of it. The Rust CI and PostgreSQL integration suite passed on the merged implementation. This closes the Rust-entry-point portion of QSA-003, but **does not** close the SQL portion: the canonical clean-install schema still contains legacy `app.tenant_id`, `app.principal_id` and `app.caller_id` RLS/function consumers. Deploying the new Rust runtime against that legacy SQL schema is not supported; the paired SQL signed-context migration must land first.
 
 ## 4. Executable current-risk regression
 
@@ -80,9 +81,9 @@ The selected direction is the qctx1 signed transaction context implemented as a 
 - Source-level consumer map: completed in this PR.
 - Current-risk negative-boundary demonstration: passed SQL PR #70 PostgreSQL 19 / pgvector 0.8.7 workflow #45050465672 (442/442).
 - Signed-context direction: selected and accepted as the remediation architecture.
-- SQL verifier + lifecycle feasibility prototype: SQL PR #69, still Draft and not production-approved.
-- Rust ContextIssuer/PostgreSQL integration: Rust PR #93, still Draft and not merged.
-- Production RLS migration and migration of all Rust transaction entry points: not implemented.
+- SQL verifier + lifecycle feasibility prototype: SQL PR #69, still Draft and not production-approved; exact current-head PostgreSQL 19 verifier and smoke workflows passed.
+- Rust ContextIssuer/PostgreSQL integration: Rust PR #93 merged; production repository entry points now use signed context.
+- Canonical SQL RLS/function migration and removal of legacy GUC authorization reads: not implemented. This is the remaining code-level blocker for QSA-003.
 - Independent review, fuzzing, packaging/provenance, supported PostgreSQL matrix, representative workload benchmark and deployment evidence: pending.
 
 **QSA-003 remains `IN_PROGRESS`, not `VERIFIED`.** A green smoke run for the exploit-demonstration test only confirms that the current weakness is reproducible. Closure requires the inverted negative assertions and all production migration/release gates above.
