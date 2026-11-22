@@ -279,4 +279,21 @@ BEGIN
   END IF;
  END LOOP;
 END $legacy_policy_guard$;
+
+DO $legacy_function_guard$
+DECLARE r record;
+BEGIN
+ FOR r IN
+  SELECT p.oid, p.proname
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid=p.pronamespace
+   WHERE n.nspname='public'
+     AND p.proname IN ('grant_caller_delegation','revoke_caller_delegation',
+       'resolve_delegated_caller','resolve_object_tenant','sweep_stale_invocation_deliveries')
+ LOOP
+  IF pg_get_functiondef(r.oid) ~ 'app\\.(tenant_id|principal_id|caller_id)' THEN
+   RAISE EXCEPTION 'legacy identity GUC remains in function %',r.proname;
+  END IF;
+ END LOOP;
+END $legacy_function_guard$;
 COMMIT;
