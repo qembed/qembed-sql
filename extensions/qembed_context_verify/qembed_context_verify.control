@@ -1,0 +1,5 @@
+comment = 'Narrow Ed25519 detached-signature verifier for Qembed transaction context'
+default_version = '1.0'
+module_pathname = '$libdir/qembed_context_verify'
+relocatable = false
+schema = qembed_crypto

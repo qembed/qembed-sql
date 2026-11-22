@@ -1,0 +1,80 @@
+name: QSA-003 signed-context canonical RLS migration
+
+on:
+  push:
+    branches: [feat/qsa003-signed-context-rls, prototype/qsa003-minimal-ed25519-verifier]
+    paths:
+      - ".github/workflows/qsa003-signed-context-migration.yml"
+      - "migrations/rt050_signed_context_rls.sql"
+      - "qembed_m0_v2_3_3_clean_schema.sql"
+      - "extensions/qembed_context_verify/**"
+      - "tests/qembed_context_verify_transaction_setup.sql"
+      - "tests/qembed_context_verify_transaction_probe.py"
+      - "tests/qsa003_signed_context_seed.sql"
+  workflow_dispatch:
+
+jobs:
+  canonical-rls-migration:
+    name: PostgreSQL 19 canonical schema + qctx1 RLS migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start PostgreSQL 19 / pgvector 0.8.7
+        run: |
+          docker run --detach --name qembed-qsa003-pg19 \
+            --publish 5432:5432 \
+            --env POSTGRES_PASSWORD=postgres \
+            pgvector/pgvector:0.8.7-pg19-bookworm
+          for attempt in $(seq 1 60); do
+            if docker exec qembed-qsa003-pg19 pg_isready -U postgres -d postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs qembed-qsa003-pg19
+          exit 1
+      - name: Install native verifier build and Python probe dependencies
+        run: |
+          docker exec --user root qembed-qsa003-pg19 bash -euxc '
+            apt-get update
+            apt-get install -y --no-install-recommends build-essential pkg-config libsodium-dev postgresql-server-dev-19 python3 python3-psycopg2 python3-venv
+          '
+          docker cp extensions/qembed_context_verify qembed-qsa003-pg19:/tmp/qembed_context_verify
+          docker exec --user root qembed-qsa003-pg19 bash -euxc '
+            make -C /tmp/qembed_context_verify PG_CONFIG="$(command -v pg_config)"
+            ldd /tmp/qembed_context_verify/qembed_context_verify.so | grep "libsodium.so.23"
+            make -C /tmp/qembed_context_verify PG_CONFIG="$(command -v pg_config)" install
+            python3 -m venv --system-site-packages /tmp/issuer-venv
+            /tmp/issuer-venv/bin/pip install --disable-pip-version-check rfc8785
+          '
+      - name: Apply canonical clean-install schema
+        run: |
+          docker cp qembed_m0_v2_3_3_clean_schema.sql qembed-qsa003-pg19:/tmp/qembed_schema.sql
+          docker exec --user postgres qembed-qsa003-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qembed_schema.sql
+      - name: Install qctx1 verifier and signed test context
+        run: |
+          docker cp tests/qembed_context_verify_transaction_setup.sql qembed-qsa003-pg19:/tmp/qembed_context_verify_transaction_setup.sql
+          docker exec --user postgres qembed-qsa003-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qembed_context_verify_transaction_setup.sql
+      - name: Seed canonical tenant, Caller and memory rows
+        run: |
+          docker cp tests/qsa003_signed_context_seed.sql qembed-qsa003-pg19:/tmp/qsa003_signed_context_seed.sql
+          docker exec --user postgres qembed-qsa003-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qsa003_signed_context_seed.sql
+      - name: Apply signed-context RLS migration
+        run: |
+          docker cp migrations/rt050_signed_context_rls.sql qembed-qsa003-pg19:/tmp/rt050_signed_context_rls.sql
+          docker exec --user postgres qembed-qsa003-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/rt050_signed_context_rls.sql
+      - name: Verify canonical RLS, delegation authority, Principal-only behavior and replay
+        run: |
+          docker cp tests/qembed_context_verify_transaction_probe.py qembed-qsa003-pg19:/tmp/qembed_context_verify_transaction_probe.py
+          docker exec --user postgres qembed-qsa003-pg19 bash -euxc '
+            QSA003_FULL_SCHEMA=1 QSA003_KEEP_SCHEMA=1 \
+              /tmp/issuer-venv/bin/python /tmp/qembed_context_verify_transaction_probe.py
+          '
+      - name: Remove PostgreSQL container
+        if: always()
+        run: docker rm -f qembed-qsa003-pg19 || true
