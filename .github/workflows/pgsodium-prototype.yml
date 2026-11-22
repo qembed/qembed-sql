@@ -54,7 +54,7 @@ jobs:
               --output /tmp/pgsodium-3.1.11.tar.gz
             mkdir -p /tmp/pgsodium-src
             tar -xzf /tmp/pgsodium-3.1.11.tar.gz --strip-components=1 -C /tmp/pgsodium-src
-            make -C /tmp/pgsodium-src PG_CONFIG="$(command -v pg_config)" SHLIB_LINK="-L/usr/local/lib -lsodium"
+            make -C /tmp/pgsodium-src PG_CONFIG="$(command -v pg_config)" SHLIB_LINK="/usr/local/lib/libsodium.so"
             ldd /tmp/pgsodium-src/pgsodium.so | grep "/usr/local/lib/libsodium.so.26"
             make -C /tmp/pgsodium-src PG_CONFIG="$(command -v pg_config)" SHLIB_LINK="-L/usr/local/lib -lsodium" install
           '
