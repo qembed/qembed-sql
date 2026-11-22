@@ -179,6 +179,17 @@ def main():
                 "operator:test-operator", primary_stage_request_id, "test-only key staging",
             ),
         )
+        try:
+            cursor.execute(
+                "SELECT qembed_crypto.stage_verification_key(%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    KEY_ID, Binary(public_key), ISSUER, audience, DEPLOYMENT,
+                    "operator:test-operator", primary_stage_request_id, "different payload must fail",
+                ),
+            )
+            raise AssertionError("idempotency key must be bound to the original request payload")
+        except psycopg2.errors.RaiseException:
+            pass
         cursor.execute(
             "SELECT qembed_crypto.stage_verification_key(%s, %s, %s, %s, %s, %s, %s, %s)",
             (
@@ -221,6 +232,8 @@ def main():
             "SELECT event_id FROM qembed_crypto.key_lifecycle_audit ORDER BY event_id LIMIT 1"
         )
         audit_event_id = cursor.fetchone()[0]
+        if audit_event_id is None:
+            raise AssertionError("key lifecycle audit should contain the staged/activated events")
         try:
             cursor.execute(
                 "UPDATE qembed_crypto.key_lifecycle_audit SET reason = 'tampered' "
