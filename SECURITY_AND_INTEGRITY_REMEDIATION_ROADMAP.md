@@ -1,7 +1,7 @@
 # QEmbed-SQL Security & Integrity Remediation Roadmap
 
 **Priority:** P0 — BLOCKER  
-**Status:** Active; source-level revalidation recorded against current `master` `10e87c07153ad0acd1c80edf1ecb752a20c64e28`; remaining P0/P1 items stay tracked  
+**Status:** Active; source-level revalidation recorded against current `master` `bb4472aaaf1522de5c036eeda059228fa8262bce`; remaining P0/P1 items stay tracked  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
 **Current revalidation baseline:** `10e87c07153ad0acd1c80edf1ecb752a20c64e28`  
