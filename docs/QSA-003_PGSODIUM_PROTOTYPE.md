@@ -8,13 +8,13 @@ References:
 - PGXN release 3.1.11 (2026-06-10): https://www.pgxn.org/dist/pgsodium/3.1.11/  
 - Exact source commit: https://github.com/michelp/pgsodium/commit/a8b8a2739bab1f7a07445b1c911e2bd1abf67784  
 - Unsigned tag metadata: https://github.com/michelp/pgsodium/releases/tag/v3.1.11  
-- Upstream signed-provenance request: https://github.com/michelp/pgsodium/issues/127
+- Issue #127 disposition (closed by maintainer): https://github.com/michelp/pgsodium/issues/127
 - pgsodium API documentation: https://github.com/michelp/pgsodium
 - PostgreSQL 19 release notes: https://www.postgresql.org/docs/19/release-19.html
 
 ## Pinned source and provenance caveat
 
-The build uses the exact source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784`, referenced by tag `v3.1.11`. GitHub reports that annotated tag as **unsigned**. The upstream issue tracker also contains an open request for signed release provenance (#127, opened 2026-11-07). Therefore pinning the commit makes the experiment reproducible but does not establish authenticated upstream provenance. This is a blocker to treating the extension as an approved production dependency until the project accepts an independently verified source/build process.
+The build uses the exact source commit `a8b8a2739bab1f7a07445b1c911e2bd1abf67784`, referenced by tag `v3.1.11`. GitHub reports that annotated tag as **unsigned**. An issue (#127) that requested signed release provenance was closed by the maintainer, who characterized the request as AI spam; it is not evidence of an upstream security commitment or response. Pinning the commit makes the experiment reproducible but does not authenticate who published it. Before production adoption, independently verify the source and build provenance or choose a distribution process with an authenticated chain of custody.
 
 ## What CI proves
 
