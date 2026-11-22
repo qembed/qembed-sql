@@ -1,10 +1,10 @@
 # QEmbed-SQL Security & Integrity Remediation Roadmap
 
 **Priority:** P0 — BLOCKER  
-**Status:** Active; source-level revalidation recorded against current `master` `8d4ea1e88b467bec0240bfe7657a0181609d2110`; remaining P0/P1 items stay tracked  
+**Status:** Active; source-level revalidation recorded against current `master` `10e87c07153ad0acd1c80edf1ecb752a20c64e28`; remaining P0/P1 items stay tracked  
 **Scope:** `qembed/qembed-sql` only, unless a separately approved architecture decision explicitly expands scope  
 **Audit baseline:** `164da3c` (user-run adversarial audit; PostgreSQL 16.15 + pgvector 0.8.7)  
-**Current revalidation baseline:** `4fbf19ca97154162155f4929d768118428de4b6d`  
+**Current revalidation baseline:** `10e87c07153ad0acd1c80edf1ecb752a20c64e28`  
 **Validation target:** PostgreSQL 19 + pgvector 0.8.7  
 **Rule:** No finding is closed by documentation, code inspection alone, or a green legacy smoke suite. Closure requires a regression test that fails before the fix and passes after it, plus recorded validation evidence.
 
@@ -102,7 +102,7 @@ The first two can return identifiers belonging to other tenants. Background-work
 
 **Reported severity:** Medium  
 **Original evidence:** reproduced on `164da3c`  
-**Current status:** `IN_PROGRESS` — the project owner selected the signed transaction-context remediation. [Consumer map and migration contract](docs/QSA-003_LEGACY_GUC_CONSUMER_MAP.md) records every current SQL consumer and the Rust bootstrap path. [Regression probe](tests/26_qsa003_legacy_guc_boundary.sql) demonstrates the current tenant, Principal and Caller GUC forgery paths as `qembed_runtime`; CI evidence is pending. SQL PR #69 and Rust PR #93 remain Draft feasibility/integration work, not production migration.
+**Current status:** `IN_PROGRESS` — the project owner selected the signed transaction-context remediation. [Consumer map and migration contract](docs/QSA-003_LEGACY_GUC_CONSUMER_MAP.md) records every current SQL consumer and the Rust bootstrap path. [Regression probe](tests/26_qsa003_legacy_guc_boundary.sql) demonstrates the current tenant, Principal and Caller GUC forgery paths as `qembed_runtime`; CI evidence is pending. Rust signed-context transaction entry points were merged in Rust PR #93 (merge commit `1534c3c479289dcf5a642088761f86e5656d5ae3`); `begin_tenant_transaction` remains only for compatibility/tests and has no production source caller. SQL PR #69 is still a Draft verifier/key-lifecycle feasibility prototype. Canonical SQL RLS/functions still consume legacy identity GUCs, so the Rust and SQL production contracts are not yet deployment-compatible.
 
 **Reported behavior:** `app.tenant_id`, `app.principal_id`, and `app.caller_id` are session settings writable by the runtime role. Under arbitrary SQL execution as `qembed_runtime`, a caller can forge context and bypass the intended delegation boundary, including episodic-memory isolation.
 
@@ -113,9 +113,9 @@ The first two can return identifiers belonging to other tenants. Background-work
 - [x] State explicitly whether arbitrary SQL execution under `qembed_runtime` is inside or outside the database threat model: it is in scope for cross-tenant/Principal/Caller identity forgery.
 - [x] Record the consequence: current GUC-driven RLS protects against application mistakes, not arbitrary SQL execution as the runtime role.
 - [x] Select a trusted signed transaction-context boundary; the project owner accepted RT-050 as the remediation direction. Production implementation and rollout remain pending.
-- [x] Run the current-risk regression probe on PostgreSQL 19 + pgvector 0.8.7: SQL PR #70 workflow [#45050613826](https://github.com/qembed/qembed-sql/actions/runs/45050613826), 442/442 passed. This confirms the current vulnerability is reproducible; it does not close QSA-003.
+- [x] Run the current-risk regression probe on PostgreSQL 19 + pgvector 0.8.7: SQL PR #70 current-head workflow [#45051017986](https://github.com/qembed/qembed-sql/actions/runs/45051017986), PostgreSQL 19 / pgvector 0.8.7 smoke passed (442 assertions). This confirms the current vulnerability is reproducible; it does not close QSA-003.
 - [ ] Replace every canonical SQL RLS/function identity read with verified token accessors; remove legacy GUC fallback and `app.caller_id` writes.
-- [ ] Migrate all Rust repository transaction entry points to the signed-context transaction API; redesign the pre-token delegation resolver so it validates explicit trusted inputs and does not establish RLS identity through GUCs.
+- [x] Migrate production Rust repository transaction entry points to signed-context transactions in Rust PR #93; retain the legacy transaction helper only for compatibility/tests, with no production source caller. The canonical SQL schema still needs its signed-context RLS/function migration before coordinated deployment.
 - [ ] Add inverted negative tests proving forged legacy GUCs do not change effective identity under the actual runtime role; retain positive tenant/Principal/Caller behavior.
 - [ ] Complete PostgreSQL 19 integration, connection-pool/replay tests, independent security review, C-extension fuzzing, packaging/provenance, supported PostgreSQL matrix, representative RLS workload benchmark and deployment validation.
 
@@ -334,7 +334,7 @@ Every remediation PR must include:
 |---|---|---|---|---|
 | QSA-001 | PR #29; 396/396 PR-head and post-merge | [PR #29](https://github.com/qembed/qembed-sql/pull/29) | 396/396 | VERIFIED |
 | QSA-002 | PR #28; 388/388 PR-head and post-merge | [PR #28](https://github.com/qembed/qembed-sql/pull/28) | 388/388 | VERIFIED |
-| QSA-003 | RT-049 documents forgeable GUCs; RT-050 design parked on branch, implementation/prototype pending | [ADR RT-049](ADR_RT-049_Principal_Caller_Delegation.md) / [RT-050 branch](https://github.com/qembed/qembed-sql/tree/architecture/rt-050-signed-transaction-context) | Pending | DOCUMENTED_RISK |
+| QSA-003 | Rust signed-context repository path merged in Rust PR #93; SQL PR #69 verifier/key-lifecycle prototype passes PG19 CI but remains Draft; canonical SQL RLS/function migration and independent production gates remain open | [Rust PR #93](https://github.com/qembed/qembed-object-runtime/pull/93) / [SQL PR #69](https://github.com/qembed/qembed-sql/pull/69) / [SQL evidence PR #70](https://github.com/qembed/qembed-sql/pull/70) | SQL exploit-demonstration smoke 442 assertions; Rust/SQL prototype integration passed; production canonical schema not migrated | IN_PROGRESS |
 | QSA-004 | PR #34; 409/409 PR-head and post-merge | [PR #34](https://github.com/qembed/qembed-sql/pull/34) | 409/409 | VERIFIED |
 | QSA-005 | PR #31; 404/404 PR-head and post-merge | [PR #31](https://github.com/qembed/qembed-sql/pull/31) | 404/404 | VERIFIED |
 | QSA-006 | PR #35; 416/416 PR-head and post-merge | [PR #35](https://github.com/qembed/qembed-sql/pull/35) | 416/416 | VERIFIED |
