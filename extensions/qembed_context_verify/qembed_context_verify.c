@@ -1,6 +1,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "utils/bytea.h"
+#include "varatt.h"
 
 #include <sodium.h>
 
@@ -23,16 +24,16 @@ qembed_context_verify_detached(PG_FUNCTION_ARGS)
     bytea *signature = PG_GETARG_BYTEA_PP(0);
     bytea *message = PG_GETARG_BYTEA_PP(1);
     bytea *public_key = PG_GETARG_BYTEA_PP(2);
-
     const Size signature_len = VARSIZE_ANY_EXHDR(signature);
     const Size message_len = VARSIZE_ANY_EXHDR(message);
     const Size public_key_len = VARSIZE_ANY_EXHDR(public_key);
+    int result;
 
     if (signature_len != crypto_sign_BYTES ||
         public_key_len != crypto_sign_PUBLICKEYBYTES)
         PG_RETURN_BOOL(false);
 
-    const int result = crypto_sign_verify_detached(
+    result = crypto_sign_verify_detached(
         (const unsigned char *) VARDATA_ANY(signature),
         (const unsigned char *) VARDATA_ANY(message),
         (unsigned long long) message_len,
