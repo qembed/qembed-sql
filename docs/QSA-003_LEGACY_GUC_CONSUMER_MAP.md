@@ -1,6 +1,6 @@
 # QSA-003 — legacy identity-GUC consumer map and migration contract
 
-**Status:** Source map complete; regression probe added; signed-context migration in progress  
+**Status:** Source map complete; current-risk regression passed on PostgreSQL 19; signed-context migration in progress  
 **Canonical schema baseline:** `qembed_m0_v2_3_3_clean_schema.sql`, blob `1971d97a13a07561d1319e0287c6c129e3276851`  
 **Runtime companion:** `qembed/qembed-object-runtime`, current `main` source  
 **Purpose:** enumerate every SQL identity-GUC read/write found in the canonical clean-install schema and connect it to the Rust transaction bootstrap.
@@ -60,7 +60,7 @@ The signed-context entry point therefore exists and is integration-tested, but t
 - setting `app.principal_id` to another Principal allows the runtime role to create a delegation as that Principal;
 - setting `app.caller_id` directly switches episodic-memory visibility from Caller A to Caller B without going through the resolver.
 
-The test is wired into `tests/run_smoke.sh` after the existing tenant, delegation and Caller-memory fixtures. Its expected pass means the known weakness is reproduced and documented. After remediation, this test must be inverted into negative assertions: forged legacy GUC writes must have no effect on effective identity.
+The test is wired into `tests/run_smoke.sh` after the existing tenant, delegation and Caller-memory fixtures. SQL PR #70 workflow [#45050465672](https://github.com/qembed/qembed-sql/actions/runs/45050465672) passed the full PostgreSQL 19 / pgvector 0.8.7 smoke suite: **442/442**. Its expected pass means the known weakness is reproduced and documented. After remediation, this test must be inverted into negative assertions: forged legacy GUC writes must have no effect on effective identity.
 
 ## 5. Required production migration
 
@@ -78,7 +78,7 @@ The selected direction is the qctx1 signed transaction context implemented as a 
 ## 6. Current status
 
 - Source-level consumer map: completed in this PR.
-- Current-risk negative-boundary demonstration: added; CI evidence pending.
+- Current-risk negative-boundary demonstration: passed SQL PR #70 PostgreSQL 19 / pgvector 0.8.7 workflow #45050465672 (442/442).
 - Signed-context direction: selected and accepted as the remediation architecture.
 - SQL verifier + lifecycle feasibility prototype: SQL PR #69, still Draft and not production-approved.
 - Rust ContextIssuer/PostgreSQL integration: Rust PR #93, still Draft and not merged.
