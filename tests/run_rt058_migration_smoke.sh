@@ -8,6 +8,9 @@ psql -X -q -d postgres -c "DROP DATABASE IF EXISTS ${DB}" -c "CREATE DATABASE ${
 P="psql -X -q -v ON_ERROR_STOP=1 -d ${DB}"
 
 $P -f ../qembed_m0_v2_3_3_clean_schema.sql
+$P -f ../tests/qembed_context_verify_transaction_setup.sql
+$P -f ../tests/qsa003_signed_context_seed.sql
+$P -f ../migrations/rt050_signed_context_rls.sql
 $P -f ../migrations/rt058_principal_delegation_public_invocation.sql
 
 check() {
