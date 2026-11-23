@@ -39,7 +39,7 @@ jobs:
           docker exec --user root qembed-pg19-minimal bash -euxc '
             apt-get update
             apt-get install -y --no-install-recommends build-essential pkg-config libsodium-dev postgresql-server-dev-19 python3 python3-psycopg2 python3-venv
-            test "$(pg_config --version)" = "PostgreSQL 19.0"
+            test "$(pg_config --version | cut -d" " -f1-2)" = "PostgreSQL 19.0"
             pkg-config --modversion libsodium
           '
           docker cp extensions/qembed_context_verify qembed-pg19-minimal:/tmp/qembed_context_verify
