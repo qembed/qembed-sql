@@ -20,6 +20,7 @@ $P -f ../tests/qsa003_signed_context_seed.sql
 $P -f ../migrations/rt050_signed_context_rls.sql
 $P -f ../migrations/rt058_principal_delegation_public_invocation.sql
 $P -f ../migrations/rt059_anonymous_context_v2.sql
+$P -f ../migrations/rt060_anonymous_object_caller.sql
 
 check() {
   local label="$1"
@@ -40,6 +41,8 @@ check "Owner identity collision guard is installed" \
   "SELECT pg_get_functiondef('sync_legacy_owner_principal()'::regprocedure) LIKE '%legacy Owner identity conflicts with canonical Principal identity%'"
 check "qctx2 Anonymous accessors are installed" \
   "SELECT to_regprocedure('qembed_crypto.current_subject_kind()') IS NOT NULL AND to_regprocedure('qembed_crypto.current_object_id()') IS NOT NULL AND to_regprocedure('qembed_crypto.current_anonymous_fingerprint()') IS NOT NULL"
+check "Object-scoped Anonymous Caller resolver is installed" \
+  "SELECT to_regclass('public.object_anonymous_callers') IS NOT NULL AND to_regprocedure('qembed_crypto.get_or_create_anonymous_caller(uuid,uuid)') IS NOT NULL AND to_regprocedure('qembed_crypto.resolve_anonymous_caller(uuid,uuid,uuid)') IS NOT NULL"
 
 docker cp qembed_context_verify_transaction_probe.py qembed-postgres:/tmp/qembed_context_verify_transaction_probe.py
 docker exec --user postgres qembed-postgres bash -euxc \
