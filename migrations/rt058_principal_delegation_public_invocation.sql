@@ -29,6 +29,40 @@ SELECT op.caller_id,
   FROM owner_principals AS op
 ON CONFLICT (id) DO NOTHING;
 
+CREATE OR REPLACE FUNCTION sync_legacy_owner_principal()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $sync_legacy_owner_principal$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO principals (id, tenant_id, kind, key_hash, revoked_at)
+        VALUES (
+            NEW.caller_id, NEW.tenant_id, 'TenantOwner',
+            digest('legacy-owner-principal:' || NEW.tenant_id::text || ':' || NEW.caller_id::text, 'sha256'),
+            NEW.disabled_at
+        )
+        ON CONFLICT (id) DO NOTHING;
+        RETURN NEW;
+    END IF;
+    IF NEW.disabled_at IS DISTINCT FROM OLD.disabled_at THEN
+        UPDATE principals SET revoked_at = NEW.disabled_at
+         WHERE id = NEW.caller_id AND tenant_id = NEW.tenant_id
+           AND kind = 'TenantOwner'
+           AND (revoked_at IS NULL OR NEW.disabled_at IS NOT NULL);
+    END IF;
+    RETURN NEW;
+END
+$sync_legacy_owner_principal$;
+
+DROP TRIGGER IF EXISTS trg_sync_legacy_owner_principal ON owner_principals;
+CREATE TRIGGER trg_sync_legacy_owner_principal
+    AFTER INSERT OR UPDATE OF disabled_at ON owner_principals
+    FOR EACH ROW EXECUTE FUNCTION sync_legacy_owner_principal();
+
+ALTER FUNCTION sync_legacy_owner_principal() OWNER TO qembed_definer;
+GRANT INSERT, UPDATE ON principals TO qembed_definer;
+
 DO $identity_check$
 BEGIN
     IF EXISTS (
@@ -50,12 +84,12 @@ ALTER TABLE objects
 -- that granted/revoked a delegation is recorded separately from its recipient.
 ALTER TABLE principal_caller_delegations
     DROP CONSTRAINT IF EXISTS principal_caller_delegations_check1,
+    DROP CONSTRAINT IF EXISTS principal_caller_delegations_principal_fk,
+    DROP CONSTRAINT IF EXISTS principal_caller_delegations_revoker_fk,
     DROP CONSTRAINT IF EXISTS principal_caller_delegations_tenant_id_principal_id_fkey,
     DROP CONSTRAINT IF EXISTS principal_caller_delegations_tenant_id_revoked_by_principal_id_fkey;
 
 ALTER TABLE principal_caller_delegations
-    ADD CONSTRAINT principal_caller_delegations_revoker_pair_check
-        CHECK ((revoked_at IS NULL) = (revoked_by_principal_id IS NULL)),
     ADD CONSTRAINT principal_caller_delegations_principal_fk
         FOREIGN KEY (tenant_id, principal_id)
         REFERENCES principals (tenant_id, id) ON DELETE RESTRICT,
