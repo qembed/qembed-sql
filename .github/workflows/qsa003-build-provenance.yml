@@ -45,7 +45,6 @@ jobs:
               --entrypoint bash qembed-qsa003-builder:ci -lc 'sleep infinity'
             docker cp extensions/qembed_context_verify "$instance:/tmp/qembed_context_verify"
             docker exec --user root "$instance" bash -euxc '
-              export SOURCE_DATE_EPOCH="$(git -C /tmp/qembed_context_verify rev-parse --show-toplevel >/dev/null 2>&1 && echo 0 || echo 0)"
               make -C /tmp/qembed_context_verify clean
               make -C /tmp/qembed_context_verify PG_CONFIG="$(command -v pg_config)"
               ldd /tmp/qembed_context_verify/qembed_context_verify.so
