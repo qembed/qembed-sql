@@ -39,6 +39,7 @@ CREATE POLICY object_anonymous_callers_definer_scope
 
 REVOKE ALL ON object_anonymous_callers FROM PUBLIC, qembed_runtime;
 GRANT SELECT, INSERT ON object_anonymous_callers TO qembed_definer;
+GRANT INSERT ON callers TO qembed_definer;
 
 CREATE FUNCTION qembed_crypto.get_or_create_anonymous_caller(
     p_tenant_id UUID,
