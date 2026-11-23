@@ -68,7 +68,7 @@ jobs:
               echo "compiler=$(cc --version | head -n 1)"
               echo "libsodium=$(pkg-config --modversion libsodium)"
               echo "pgxs=$(pg_config --pgxs)"
-              dpkg-query -W -f="package=\\${Package} version=\\${Version}\\n" \\
+              dpkg-query -W -f="package=\${Package} version=\${Version}\\n" \\
                 build-essential pkg-config libsodium-dev postgresql-server-dev-19
             } > /tmp/toolchain.txt
           '
