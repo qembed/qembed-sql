@@ -51,7 +51,7 @@ The integration test also attempts to install the maximum-size token envelope to
 
 The verified-context function uses statement-stable time and is declared STABLE so the uncorrelated scalar subquery in the RLS policy can be planned as an InitPlan. The integration test asserts that plan shape directly, then rejects modified payload/signature, unknown envelope version, wrong backend/transaction/database/deployment/issuer/version, expired tokens, replay after COMMIT/ROLLBACK and replay from another backend. It verifies savepoint rollback, read-only transactions, typed claim accessors, least privilege, and RLS isolation despite forged legacy identity GUCs.
 
-The Python issuer is a verifier-fixture harness, not a replacement for the Rust issuer. Rust PR #93 is now merged and its PostgreSQL integration suite exercises the real Rust `ContextIssuer` against this prototype contract. That integration evidence does not make this prototype the canonical production schema: the production clean-install DDL and all production SQL RLS/function consumers still need migration and re-validation.
+The Python issuer is a verifier-fixture harness, not a replacement for the Rust issuer. Rust PR #93 is merged. Rust PR #118 now exercises the real Rust `ContextIssuer` against the canonical clean-install schema plus the SQL PR #73 signed-context migration candidate. This is integration evidence for the Draft candidate; SQL `master` remains unchanged and production security/release gates remain open.
 
 ## Principal-only and Caller-scoped contexts
 
