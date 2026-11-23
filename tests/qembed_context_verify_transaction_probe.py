@@ -528,6 +528,17 @@ def main():
                 raise AssertionError("malformed token envelope was accepted")
         assert_invalid(cursor, sign, "malformed signed JSON", payload_override=b"not-json", signature_override=sign(b"not-json"))
         assert_invalid(cursor, sign, "unknown claim", {"unexpected_claim": "not-allowed"})
+        # A valid signature does not make an incomplete claim set valid. In
+        # particular, SQL NULL comparison semantics must not let a missing
+        # required claim (such as nonce) pass a naive <> 'string' check.
+        missing_nonce_claims = dict(claims)
+        missing_nonce_claims.pop("nonce")
+        missing_nonce_payload = rfc8785.dumps(missing_nonce_claims)
+        assert_invalid(
+            cursor, sign, "missing required nonce",
+            payload_override=missing_nonce_payload,
+            signature_override=sign(missing_nonce_payload),
+        )
         assert_invalid(cursor, sign, "non-string Caller claim", {"caller_id": 17})
         assert_invalid(cursor, sign, "malformed Caller claim", {"caller_id": "not-a-uuid"})
         assert_invalid(cursor, sign, "unknown key", {"key_id": "not-registered"})
