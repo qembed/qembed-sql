@@ -41,7 +41,7 @@ check "Owner identity collision guard is installed" \
 check "qctx2 Anonymous accessors are installed" \
   "SELECT to_regprocedure('qembed_crypto.current_subject_kind()') IS NOT NULL AND to_regprocedure('qembed_crypto.current_object_id()') IS NOT NULL AND to_regprocedure('qembed_crypto.current_anonymous_fingerprint()') IS NOT NULL"
 
-docker cp tests/qembed_context_verify_transaction_probe.py qembed-postgres:/tmp/qembed_context_verify_transaction_probe.py
+docker cp qembed_context_verify_transaction_probe.py qembed-postgres:/tmp/qembed_context_verify_transaction_probe.py
 docker exec --user postgres qembed-postgres bash -euxc \
   "PGDATABASE='${DB}' QSA003_FULL_SCHEMA=1 QSA003_KEEP_SCHEMA=1 /tmp/issuer-venv/bin/python /tmp/qembed_context_verify_transaction_probe.py"
 
