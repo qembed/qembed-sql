@@ -182,6 +182,7 @@ CREATE TABLE objects (
   tenant_id UUID NOT NULL,
   object_id UUID NOT NULL,
   state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft','validating','active','suspended','archived')),  -- AUDIT-003: Rust contract
+  anonymous_invocation_enabled BOOLEAN NOT NULL DEFAULT TRUE,
   published_version_id UUID,
   binding_counter BIGINT NOT NULL DEFAULT 0 CHECK (binding_counter >= 0), -- A9 (future extension, defaulted)
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -367,13 +368,12 @@ CREATE TABLE principal_caller_delegations (
   revoked_at TIMESTAMPTZ,
   revoked_by_principal_id UUID,
   CHECK ((revoked_at IS NULL) = (revoked_by_principal_id IS NULL)),
-  CHECK (revoked_by_principal_id IS NULL OR revoked_by_principal_id = principal_id),
   FOREIGN KEY (tenant_id, principal_id)
-    REFERENCES owner_principals(tenant_id, caller_id) ON DELETE RESTRICT,
+    REFERENCES principals(tenant_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (tenant_id, caller_id)
     REFERENCES callers(tenant_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (tenant_id, revoked_by_principal_id)
-    REFERENCES owner_principals(tenant_id, caller_id) ON DELETE RESTRICT
+    REFERENCES principals(tenant_id, id) ON DELETE RESTRICT
 );
 CREATE UNIQUE INDEX principal_caller_delegations_active
   ON principal_caller_delegations(tenant_id, principal_id, caller_id)
@@ -1587,37 +1587,48 @@ $authenticate_principal$;
 -- These functions trust app.tenant_id and app.principal_id only when set by the
 -- authenticated application transaction. The runtime role has no direct DML grant
 -- on the delegation table.
-CREATE FUNCTION grant_caller_delegation(p_caller_id UUID)
+CREATE FUNCTION grant_caller_delegation(p_target_principal_id UUID, p_caller_id UUID)
 RETURNS UUID
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $grant_caller_delegation$
 DECLARE
   v_tenant_id UUID := NULLIF(current_setting('app.tenant_id', true), '')::uuid;
-  v_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
+  v_actor_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
   v_delegation_id UUID := gen_random_uuid();
 BEGIN
-  IF v_tenant_id IS NULL OR v_principal_id IS NULL THEN
-    RAISE EXCEPTION 'tenant and authenticated principal context are required'
+  IF v_tenant_id IS NULL OR v_actor_principal_id IS NULL
+     OR p_target_principal_id IS NULL OR p_caller_id IS NULL THEN
+    RAISE EXCEPTION 'tenant, authenticated Owner, target Principal and Caller are required'
       USING ERRCODE = '42501';
   END IF;
-  PERFORM 1 FROM owner_principals p
-   WHERE p.tenant_id = v_tenant_id AND p.caller_id = v_principal_id
-     AND p.disabled_at IS NULL
+  PERFORM 1 FROM principals actor
+   WHERE actor.tenant_id = v_tenant_id AND actor.id = v_actor_principal_id
+     AND actor.kind = 'TenantOwner' AND actor.revoked_at IS NULL
+     AND EXISTS (SELECT 1 FROM owner_principals legacy
+                  WHERE legacy.tenant_id = actor.tenant_id
+                    AND legacy.caller_id = actor.id AND legacy.disabled_at IS NULL)
    FOR SHARE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'authenticated principal is not active in this tenant'
+    RAISE EXCEPTION 'only an active TenantOwner may grant Caller delegation'
+      USING ERRCODE = '42501';
+  END IF;
+  PERFORM 1 FROM principals target
+   WHERE target.tenant_id = v_tenant_id AND target.id = p_target_principal_id
+     AND target.revoked_at IS NULL
+   FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'target Principal is not active in this tenant'
       USING ERRCODE = '42501';
   END IF;
   PERFORM 1 FROM callers c
-   WHERE c.tenant_id = v_tenant_id AND c.id = p_caller_id
-     AND c.revoked_at IS NULL
+   WHERE c.tenant_id = v_tenant_id AND c.id = p_caller_id AND c.revoked_at IS NULL
    FOR SHARE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'target caller is not active in this tenant'
+    RAISE EXCEPTION 'target Caller is not active in this tenant'
       USING ERRCODE = '42501';
   END IF;
   INSERT INTO principal_caller_delegations
     (delegation_id, tenant_id, principal_id, caller_id)
-  VALUES (v_delegation_id, v_tenant_id, v_principal_id, p_caller_id);
+  VALUES (v_delegation_id, v_tenant_id, p_target_principal_id, p_caller_id);
   RETURN v_delegation_id;
 END
 $grant_caller_delegation$;
@@ -1627,30 +1638,31 @@ RETURNS BOOLEAN
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $revoke_caller_delegation$
 DECLARE
   v_tenant_id UUID := NULLIF(current_setting('app.tenant_id', true), '')::uuid;
-  v_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
+  v_actor_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
 BEGIN
-  IF v_tenant_id IS NULL OR v_principal_id IS NULL THEN
-    RAISE EXCEPTION 'tenant and authenticated principal context are required'
+  IF v_tenant_id IS NULL OR v_actor_principal_id IS NULL THEN
+    RAISE EXCEPTION 'tenant and authenticated Owner context are required'
       USING ERRCODE = '42501';
   END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM owner_principals p
-     WHERE p.tenant_id = v_tenant_id AND p.caller_id = v_principal_id
-       AND p.disabled_at IS NULL
-  ) THEN
-    RAISE EXCEPTION 'authenticated principal is not active in this tenant'
+  PERFORM 1 FROM principals actor
+   WHERE actor.tenant_id = v_tenant_id AND actor.id = v_actor_principal_id
+     AND actor.kind = 'TenantOwner' AND actor.revoked_at IS NULL
+     AND EXISTS (SELECT 1 FROM owner_principals legacy
+                  WHERE legacy.tenant_id = actor.tenant_id
+                    AND legacy.caller_id = actor.id AND legacy.disabled_at IS NULL)
+   FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'only an active TenantOwner may revoke Caller delegation'
       USING ERRCODE = '42501';
   END IF;
   UPDATE principal_caller_delegations
-     SET revoked_at = clock_timestamp(), revoked_by_principal_id = v_principal_id
+     SET revoked_at = clock_timestamp(), revoked_by_principal_id = v_actor_principal_id
    WHERE delegation_id = p_delegation_id AND tenant_id = v_tenant_id
-     AND principal_id = v_principal_id AND revoked_at IS NULL;
+     AND revoked_at IS NULL;
   RETURN FOUND;
 END
 $revoke_caller_delegation$;
 
--- Resolve an explicit Caller and hold the delegation plus both lifecycle rows
--- against concurrent revocation/disable until the caller's transaction commits.
 CREATE FUNCTION resolve_delegated_caller(p_caller_id UUID)
 RETURNS TABLE (delegation_id UUID, caller_id UUID, caller_kind TEXT)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $resolve_delegated_caller$
@@ -1665,20 +1677,16 @@ BEGIN
   RETURN QUERY
   SELECT d.delegation_id, c.id, c.caller_kind
     FROM principal_caller_delegations d
-    JOIN owner_principals p
-      ON p.tenant_id = d.tenant_id AND p.caller_id = d.principal_id
-    JOIN callers c
-      ON c.tenant_id = d.tenant_id AND c.id = d.caller_id
+    JOIN principals p ON p.tenant_id = d.tenant_id AND p.id = d.principal_id
+    JOIN callers c ON c.tenant_id = d.tenant_id AND c.id = d.caller_id
    WHERE d.tenant_id = v_tenant_id AND d.principal_id = v_principal_id
      AND d.caller_id = p_caller_id AND d.revoked_at IS NULL
-     AND p.disabled_at IS NULL AND c.revoked_at IS NULL
+     AND p.revoked_at IS NULL AND c.revoked_at IS NULL
    FOR SHARE OF d, p, c;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'no active delegation for this Principal and Caller'
       USING ERRCODE = '42501';
   END IF;
-
-  -- Bind caller-scoped RLS to the validated delegation for this transaction only.
   PERFORM set_config('app.caller_id', p_caller_id::text, true);
 END
 $resolve_delegated_caller$;
@@ -1882,7 +1890,7 @@ GRANT INSERT, UPDATE, DELETE ON kill_switches TO qembed_runtime;
 GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddings,
   knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
 GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
-GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid),
+GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid,uuid),
   revoke_caller_delegation(uuid), resolve_delegated_caller(uuid), resolve_object_tenant(uuid,uuid),
   sweep_stale_invocation_deliveries(timestamptz,integer) TO qembed_runtime;
 
