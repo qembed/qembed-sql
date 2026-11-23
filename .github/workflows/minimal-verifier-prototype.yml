@@ -1,6 +1,13 @@
 name: QSA-003 minimal Ed25519 verifier PostgreSQL 19 prototype
 
 on:
+  push:
+    branches: [security/qsa003-extended-fuzz-campaign]
+    paths:
+      - ".github/workflows/minimal-verifier-prototype.yml"
+      - "extensions/qembed_context_verify/**"
+      - "tests/fuzz/**"
+      - "docs/QSA-003_MINIMAL_VERIFIER_PROTOTYPE.md"
   pull_request:
     branches: [master, prototype/qsa003-canonical-signed-context]
     paths:
