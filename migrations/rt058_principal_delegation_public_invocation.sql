@@ -61,6 +61,8 @@ CREATE TRIGGER trg_sync_legacy_owner_principal
     FOR EACH ROW EXECUTE FUNCTION sync_legacy_owner_principal();
 
 ALTER FUNCTION sync_legacy_owner_principal() OWNER TO qembed_definer;
+DROP POLICY IF EXISTS definer_owner_sync ON principals;
+CREATE POLICY definer_owner_sync ON principals FOR ALL TO qembed_definer USING (true) WITH CHECK (true);
 GRANT INSERT, UPDATE ON principals TO qembed_definer;
 
 DO $identity_check$
