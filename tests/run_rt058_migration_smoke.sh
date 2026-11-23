@@ -19,6 +19,7 @@ $P -f ../tests/qembed_context_verify_transaction_setup.sql
 $P -f ../tests/qsa003_signed_context_seed.sql
 $P -f ../migrations/rt050_signed_context_rls.sql
 $P -f ../migrations/rt058_principal_delegation_public_invocation.sql
+$P -f ../migrations/rt059_anonymous_context_v2.sql
 
 check() {
   local label="$1"
@@ -37,5 +38,11 @@ check "delegation revocation actor pair constraint exists" \
   "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='principal_caller_delegations'::regclass AND conname='principal_caller_delegations_revocation_pair_check' AND contype='c')"
 check "Owner identity collision guard is installed" \
   "SELECT pg_get_functiondef('sync_legacy_owner_principal()'::regprocedure) LIKE '%legacy Owner identity conflicts with canonical Principal identity%'"
+check "qctx2 Anonymous accessors are installed" \
+  "SELECT to_regprocedure('qembed_crypto.current_subject_kind()') IS NOT NULL AND to_regprocedure('qembed_crypto.current_object_id()') IS NOT NULL AND to_regprocedure('qembed_crypto.current_anonymous_fingerprint()') IS NOT NULL"
 
-echo "RT-058 incremental migration smoke passed"
+docker cp tests/qembed_context_verify_transaction_probe.py qembed-postgres:/tmp/qembed_context_verify_transaction_probe.py
+docker exec --user postgres qembed-postgres bash -euxc \
+  "PGDATABASE='${DB}' QSA003_FULL_SCHEMA=1 QSA003_KEEP_SCHEMA=1 /tmp/issuer-venv/bin/python /tmp/qembed_context_verify_transaction_probe.py"
+
+echo "RT-058/RT-059 incremental migration smoke passed"
