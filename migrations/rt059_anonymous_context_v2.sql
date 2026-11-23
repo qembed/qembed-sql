@@ -122,7 +122,8 @@ BEGIN
         RETURN NULL;
       END IF;
     END LOOP;
-    IF jsonb_typeof(v_claims->'principal_id') <> 'null'
+    IF NOT (v_claims ? 'principal_id')
+       OR jsonb_typeof(v_claims->'principal_id') <> 'null'
        OR NOT (v_claims ? 'caller_id')
        OR jsonb_typeof(v_claims->'caller_id') NOT IN ('string', 'null')
        OR v_claims->>'version' <> '2'
