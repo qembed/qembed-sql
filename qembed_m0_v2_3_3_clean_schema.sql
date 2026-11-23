@@ -1664,6 +1664,21 @@ BEGIN
 END
 $grant_caller_delegation$;
 
+-- Backward-compatible Owner self-delegation overload. New code should use
+-- the explicit two-argument form to grant access to a different Principal.
+CREATE FUNCTION grant_caller_delegation(p_caller_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $grant_caller_delegation_legacy$
+DECLARE
+  v_principal_id UUID := NULLIF(current_setting('app.principal_id', true), '')::uuid;
+BEGIN
+  IF v_principal_id IS NULL THEN
+    RAISE EXCEPTION 'authenticated Owner context is required' USING ERRCODE = '42501';
+  END IF;
+  RETURN grant_caller_delegation(v_principal_id, p_caller_id);
+END
+$grant_caller_delegation_legacy$;
+
 CREATE FUNCTION revoke_caller_delegation(p_delegation_id UUID)
 RETURNS BOOLEAN
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $revoke_caller_delegation$
@@ -1883,7 +1898,7 @@ END $$;
 DO $qsa001_ownership$
 DECLARE f TEXT;
 BEGIN
-  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid,uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid,uuid)',
+  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','grant_caller_delegation(uuid,uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid,uuid)',
      'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
      'sweep_expired_reservations(integer)','sweep_stale_invocation_deliveries(timestamp with time zone,integer)',
      'retention_purge(text,timestamptz,text)','knowledge_documents_sync()'] LOOP
@@ -1921,7 +1936,7 @@ GRANT INSERT, UPDATE, DELETE ON kill_switches TO qembed_runtime;
 GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddings,
   knowledge_chunk_embeddings, tool_command_payloads TO qembed_runtime;    -- drafts / caller deletion / payload TTL
 GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
-GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid,uuid),
+GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid), grant_caller_delegation(uuid,uuid),
   revoke_caller_delegation(uuid), resolve_delegated_caller(uuid), resolve_object_tenant(uuid,uuid),
   sweep_stale_invocation_deliveries(timestamptz,integer) TO qembed_runtime;
 
