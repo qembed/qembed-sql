@@ -179,6 +179,15 @@ def assert_invalid(
         raise AssertionError(f"invalid context accepted: {label}")
 
 
+def assert_invalid_anonymous(cursor, sign, label, overrides=None, remove_claims=None):
+    _, _, _, token = issue_anonymous_token(
+        cursor, sign, overrides=overrides, remove_claims=remove_claims
+    )
+    result = verify(cursor, token)
+    if result is not None:
+        raise AssertionError(f"invalid Anonymous context accepted: {label}")
+
+
 def main():
     sodium = load_sodium()
     public_key, secret_key, sign = make_signer(sodium)
@@ -443,6 +452,63 @@ def main():
             cursor.execute("SELECT count(*) FROM objects")
             if cursor.fetchone()[0] != 1:
                 raise AssertionError("Principal-only token lost tenant-scoped object visibility")
+        # qctx2 is a distinct exact claim shape: Anonymous has no Principal,
+        # and the signed object/fingerprint bind the unauthenticated subject.
+        _, _, anonymous_claims, anonymous_token = issue_anonymous_token(cursor, sign)
+        if verify(cursor, anonymous_token) != anonymous_claims:
+            raise AssertionError("valid qctx2 Anonymous context was not accepted")
+        cursor.execute("SELECT set_config('app.context_token', %s, true)", (anonymous_token,))
+        cursor.execute(
+            "SELECT qembed_crypto.current_tenant_id(), "
+            "qembed_crypto.current_principal_id(), qembed_crypto.current_caller_id(), "
+            "qembed_crypto.current_subject_kind(), qembed_crypto.current_object_id(), "
+            "qembed_crypto.current_anonymous_fingerprint()"
+        )
+        anonymous_identity = cursor.fetchone()
+        if (
+            str(anonymous_identity[0]) != TENANT_A
+            or anonymous_identity[1] is not None
+            or anonymous_identity[2] is not None
+            or anonymous_identity[3] != "anonymous"
+            or str(anonymous_identity[4]) != OBJECT
+            or bytes(anonymous_identity[5]) != bytes.fromhex(ANONYMOUS_FINGERPRINT)
+        ):
+            raise AssertionError("qctx2 typed accessors returned incorrect Anonymous identity")
+        _, _, _, resolved_anonymous_token = issue_anonymous_token(
+            cursor, sign, caller_id=CALLER
+        )
+        cursor.execute(
+            "SELECT set_config('app.context_token', %s, true)",
+            (resolved_anonymous_token,),
+        )
+        cursor.execute("SELECT qembed_crypto.current_caller_id()")
+        if str(cursor.fetchone()[0]) != CALLER:
+            raise AssertionError("qctx2 did not preserve the resolved Anonymous Caller")
+
+        assert_invalid_anonymous(
+            cursor, sign, "non-null Principal", overrides={"principal_id": PRINCIPAL}
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "missing Principal claim", remove_claims=["principal_id"]
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "wrong subject kind", overrides={"subject_kind": "authenticated"}
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "malformed object ID", overrides={"object_id": "not-a-uuid"}
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "malformed subject fingerprint", overrides={"subject_fingerprint": "xyz"}
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "missing caller claim", remove_claims=["caller_id"]
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "extra claim", overrides={"unrecognized": "must-fail"}
+        )
+        if verify(cursor, anonymous_token.replace("qctx2:", "qctx1:", 1)) is not None:
+            raise AssertionError("qctx2 payload was accepted under a qctx1 envelope")
+
         cursor.execute("SELECT set_config('app.context_token', %s, true)", (token,))
 
         cursor.execute(
