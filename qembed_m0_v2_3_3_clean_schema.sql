@@ -1883,7 +1883,7 @@ END $$;
 DO $qsa001_ownership$
 DECLARE f TEXT;
 BEGIN
-  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid,uuid)',
+  FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','grant_caller_delegation(uuid,uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid,uuid)',
      'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
      'sweep_expired_reservations(integer)','sweep_stale_invocation_deliveries(timestamp with time zone,integer)',
      'retention_purge(text,timestamptz,text)','knowledge_documents_sync()'] LOOP
