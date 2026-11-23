@@ -45,14 +45,14 @@ The schema has no SQL writer for `app.tenant_id` or `app.principal_id`; those va
 
 ## 3. Rust transaction bootstrap — merged application-side migration
 
-The Rust side is no longer a Draft branch. Rust PR #93 was merged into `qembed-object-runtime/main` (merge commit `1534c3c479289dcf5a642088761f86e5656d5ae3`). The production repository path now uses the signed transaction context:
+The Rust side is no longer a Draft branch. Rust PR #93 was merged into `qembed-object-runtime/main` (merge commit `1534c3c479289dcf5a642088761f86e5656d5ae3`). The production repository path now uses the signed transaction context (and the merged Rust PR #118 integration test exercises it against the canonical SQL PR #73 candidate):
 
 1. `PgContext` owns the pool and `ContextIssuer`; trusted composition code opens transactions with `begin_principal(scope)` or `begin_caller(scope, caller_id)`.
 2. The issuer binds the token to the PostgreSQL backend, transaction, database/deployment and signed claims, then installs the single transaction-local `app.context_token` envelope.
 3. Object/Snapshot repository operations require Principal context; Caller-scoped operations require an explicitly resolved and validated Caller. Caller identity is not accepted from an external DTO.
 4. Owner pre-authentication uses the narrow `owner_principals` / `owner_credentials` lookup and does not install `app.tenant_id` as a legacy identity fallback.
 
-`begin_tenant_transaction` remains exported only for compatibility/tests; current production source has no caller of it. The Rust CI and PostgreSQL integration suite passed on the merged implementation. This closes the Rust-entry-point portion of QSA-003, but **does not** close the SQL portion: the canonical clean-install schema still contains legacy `app.tenant_id`, `app.principal_id` and `app.caller_id` RLS/function consumers. Deploying the new Rust runtime against that legacy SQL schema is not supported; the paired SQL signed-context migration must land first.
+`begin_tenant_transaction` remains exported only for compatibility/tests; current production source has no caller of it. The Rust CI and PostgreSQL integration suite passed on the merged implementation. This closes the Rust-entry-point portion of QSA-003, but **does not** close the SQL portion: SQL `master` still contains legacy `app.tenant_id`, `app.principal_id` and `app.caller_id` RLS/function consumers. The Draft PR #73 candidate applies the signed-context migration to the canonical clean-install schema; Rust PR #118 validates the real ContextIssuer against that candidate. Deploying the new Rust runtime against that legacy SQL schema is not supported; the paired SQL signed-context migration must land first.
 
 ## 4. Executable current-risk regression
 
@@ -61,7 +61,7 @@ The Rust side is no longer a Draft branch. Rust PR #93 was merged into `qembed-o
 - setting `app.principal_id` to another Principal allows the runtime role to create a delegation as that Principal;
 - setting `app.caller_id` directly switches episodic-memory visibility from Caller A to Caller B without going through the resolver.
 
-The test is wired into `tests/run_smoke.sh` after the existing tenant, delegation and Caller-memory fixtures. SQL PR #70 current-head workflow [#45073206894](https://github.com/qembed/qembed-sql/actions/runs/45073206894) passed the full PostgreSQL 19 / pgvector 0.8.7 smoke suite after the documentation correction: **442/442**. The separate canonical signed-context migration probe now proves that these legacy GUC changes no longer alter effective identity after the candidate migration is applied. Its expected pass means the known weakness is reproduced and documented. After remediation, this test must be inverted into negative assertions: forged legacy GUC writes must have no effect on effective identity.
+The test is wired into `tests/run_smoke.sh` after the existing tenant, delegation and Caller-memory fixtures. SQL PR #70 current-head workflow [#45073206894](https://github.com/qembed/qembed-sql/actions/runs/45073206894) passed the full PostgreSQL 19 / pgvector 0.8.7 smoke suite after the documentation correction: **442/442**. The separate canonical signed-context migration probe now proves that these legacy GUC changes no longer alter effective identity after the candidate migration is applied. Its expected pass means the known weakness is reproduced and documented. The candidate migration's negative assertions now prove that forged legacy GUC writes have no effect on effective identity; SQL `master` remains vulnerable until the migration is approved and deployed.
 
 ## 5. Required production migration
 
@@ -82,7 +82,7 @@ The selected direction is the qctx1 signed transaction context implemented as a 
 - Current-risk negative-boundary demonstration: passed SQL PR #70 current-head PostgreSQL 19 / pgvector 0.8.7 workflow #45073206894 (442/442).
 - Signed-context direction: selected and accepted as the remediation architecture.
 - SQL verifier + lifecycle + canonical RLS migration candidate: Draft branch `prototype/qsa003-canonical-signed-context`; exact canonical PostgreSQL 19 workflow #45073593853 passed. It is not merged or production-approved.
-- Rust ContextIssuer/PostgreSQL integration: Rust PR #93 merged; production repository entry points now use signed context.
+- Rust ContextIssuer/PostgreSQL integration: Rust PR #93 merged; PR #118 merged and passes the actual ContextIssuer test against SQL PR #73 candidate commit `ae823fc1`.
 - Canonical SQL RLS/function migration: candidate implementation and external-issuer test exist and pass on the canonical clean-install fixture, but are not merged to SQL `master`; this remains the coordinated deployment blocker.
 - Independent review, fuzzing, packaging/provenance, supported PostgreSQL matrix, representative workload benchmark and deployment evidence: pending.
 
