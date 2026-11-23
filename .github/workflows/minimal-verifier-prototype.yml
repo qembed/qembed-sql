@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/minimal-verifier-prototype.yml"
       - "extensions/qembed_context_verify/**"
+      - "tests/fuzz/**"
       - "tests/qembed_context_verify_pg19_probe.sql"
       - "tests/qembed_context_verify_transaction_setup.sql"
       - "tests/qembed_context_verify_transaction_probe.py"
@@ -38,7 +39,7 @@ jobs:
           docker exec --user root qembed-pg19-minimal bash -euxc '
             apt-get update
             apt-get install -y --no-install-recommends build-essential pkg-config libsodium-dev postgresql-server-dev-19 python3 python3-psycopg2 python3-venv
-            test "$(pg_config --version | awk "{print \$2}")" = "19.0"
+            test "$(pg_config --version | awk "{print \\$2}")" = "19.0"
             pkg-config --modversion libsodium
           '
           docker cp extensions/qembed_context_verify qembed-pg19-minimal:/tmp/qembed_context_verify
@@ -67,3 +68,28 @@ jobs:
       - name: Remove PostgreSQL container
         if: always()
         run: docker rm -f qembed-pg19-minimal || true
+
+  verifier-libfuzzer:
+    name: Fuzz shared Ed25519 verifier boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Clang and libsodium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang libsodium-dev
+      - name: Build sanitizer-instrumented libFuzzer target
+        run: |
+          clang -std=c11 -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=fuzzer,address,undefined \
+            -Iextensions/qembed_context_verify \
+            tests/fuzz/qembed_context_verify_fuzz.c \
+            -lsodium -o /tmp/qembed-context-verify-fuzz
+      - name: Run bounded fuzz campaign
+        run: |
+          mkdir -p /tmp/qembed-context-corpus
+          head -c 96 /dev/zero > /tmp/qembed-context-corpus/zero-signature-key
+          /tmp/qembed-context-verify-fuzz \
+            -max_len=8288 -max_total_time=60 -timeout=2 \
+            -print_final_stats=1 /tmp/qembed-context-corpus
