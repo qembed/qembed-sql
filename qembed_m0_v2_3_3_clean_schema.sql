@@ -121,13 +121,10 @@ CREATE TABLE principals (   -- restricted-global: tenant_id NULL only for Platfo
 );
 
 -- -----------------------------------------------------------------------------
--- 3a. Owner authentication (AUDIT-002): physical model of the current Rust auth path
---     (Rust migration 20261118000000_owner_authentication.sql, qembed-store/src/auth.rs).
---     Principal = identity of the tenant owner; credential = SHA-256 digest of a high-entropy
---     API token. Raw tokens are never stored. The Rust adapter performs a PRE-AUTH lookup (no
---     tenant Scope exists yet), so these tables carry no tenant RLS policy: access is restricted
---     by column-level grants only (see section 17). principals/callers above are the future model
---     and are NOT used by the Rust auth path.
+-- 3a. Legacy Owner authentication compatibility. The Owner HTTP API still verifies its
+--     high-entropy tokens against owner_credentials before a Scope exists. The stable identity
+--     is mirrored into principals so Caller delegation and invocation authorization use one
+--     Principal registry. Raw tokens are never stored.
 -- -----------------------------------------------------------------------------
 CREATE TABLE owner_principals (
   tenant_id UUID NOT NULL,
@@ -388,10 +385,10 @@ $caller_revocation_guard$;
 CREATE TRIGGER trg_callers_guard BEFORE UPDATE ON callers
   FOR EACH ROW EXECUTE FUNCTION callers_guard();
 
--- Principal -> Caller delegation. owner_principals remains the Rust authentication
--- identity; callers remains the invocation identity. A principal may delegate to
--- multiple callers. Each grant is an immutable historical record; revocation is final,
--- and a later re-grant creates a new delegation_id.
+-- Principal -> Caller delegation. TenantOwner grants access to a Caller for a target
+-- Principal in the same tenant. Principal and Caller remain separate identities. Each
+-- grant is an immutable historical record; revocation is final, and re-grant creates a
+-- new delegation_id. revoked_by_principal_id records the Owner actor, not the grantee.
 CREATE TABLE principal_caller_delegations (
   delegation_id UUID PRIMARY KEY,
   tenant_id UUID NOT NULL,
