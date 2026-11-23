@@ -21,13 +21,13 @@ SELECT tt.chk('QSA-003 runtime can forge tenant GUC and read tenant B object',
       WHERE tenant_id='bbbbbbbb-0000-0000-0000-000000000002'
         AND object_id='bb000000-0000-0000-0000-000000000001'$q$);
 
--- tests/07_principal_caller_delegation.sql created Principal B and Caller A.
--- The runtime can set Principal B's GUC and invoke the SECURITY DEFINER grant
--- function as if it were that Principal, despite having no authenticated proof.
+-- tests/07_principal_caller_delegation.sql created a TenantAdmin Principal B.
+-- Even if the legacy GUC is forged, the new delegation function independently
+-- enforces TenantOwner authority and rejects Principal B.
 SELECT set_config('app.tenant_id','d1100000-0000-0000-0000-000000000001',false);
 SELECT set_config('app.principal_id','d1110000-0000-0000-0000-000000000002',false);
-SELECT tt.chk('QSA-003 forged principal GUC can create a delegation as Principal B',
-  $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000001') IS NOT NULL$q$);
+SELECT tt.try('QSA-003 forged TenantAdmin GUC cannot grant Caller delegation','err',
+  $q$SELECT grant_caller_delegation('d1120000-0000-0000-0000-000000000001')$q$);
 
 -- tests/24_caller_memory_rls.sql created two delegated Callers and episodic rows.
 -- Directly setting app.caller_id bypasses resolve_delegated_caller's lock/check

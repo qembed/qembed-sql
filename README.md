@@ -69,7 +69,7 @@ Rust-репозиторий — неизменяемый источник кон
 
 ### AUDIT-002: owner authentication
 - Rust auth path использует таблицы `owner_principals` и `owner_credentials` (колонки/PK/FK/CHECK как в Rust-миграции).
-  r3 `principals`/`callers`/`authenticate_principal` остаются отдельным будущим расширением и Rust-путём не используются.
+  legacy Owner authentication remains in place for compatibility; `principals` is now the canonical identity registry for delegation and the next Principal-authenticated invocation adapter.
 - Pre-auth lookup идёт без tenant Scope, поэтому tenant-RLS на этих таблицах нет; доступ ограничен column-level grants:
   роль приложения (`qembed_runtime`) имеет только SELECT на колонки, которые читает Rust-запрос. Создание и отзыв
   credentials — `qembed_admin` (INSERT; для `owner_principals` UPDATE разрешён только по `disabled_at`, для `owner_credentials` — только отзыв через защищённый триггер; без DELETE). Revisit в AUDIT-006.
@@ -210,3 +210,15 @@ The canonical schema now records a provider-call attempt for every committed tok
 ## RUST-044 — identical-content version creation
 
 Approved contract: for the same tenant/object, an exact canonical-byte match returns `identical_content` with the existing version and snapshot IDs and creates no rows. A matching SHA-256 with different bytes fails closed as an integrity/hash-collision error. Different bytes create a Draft version and snapshot atomically in one tenant-scoped transaction. This preserves the snapshot's exact version binding and the existing unique constraint; no DDL change is made. See `ADR_RUST-044_Identical_Content_Version_Deduplication.md` and the application-level test requirements in that ADR.
+
+
+## RT-058 / RUST-058c: Principal delegation and public invocation
+
+- `principal_caller_delegations.principal_id` and `revoked_by_principal_id` now reference the canonical `(tenant_id, id)` key in `principals`, not the legacy `owner_principals` table.
+- A `TenantOwner` may grant a Caller to any active Principal in the same tenant. `TenantAdmin` and `Service` Principals may use their own active delegation but cannot grant or revoke delegations.
+- Revocation records the Owner actor separately from the grantee; delegation history remains immutable and a re-grant creates a new row.
+- The legacy Owner API credential tables remain supported. Owner identities are mirrored into `principals` with a non-authenticating synthetic digest; Owner API authentication continues to verify the original `owner_credentials` digest.
+- `objects.anonymous_invocation_enabled BOOLEAN NOT NULL DEFAULT TRUE` makes public invocation an explicit per-Object policy. It does not make a Tenant or all its Objects public.
+- The SQL smoke test `tests/07_principal_caller_delegation.sql` covers Owner-to-Principal grants, TenantAdmin/Service resolution, Owner-only grant/revoke, cross-tenant rejection, and the public-by-default column contract.
+
+The SQL migration must be applied after RT-050 signed-context setup. The Rust repository carries the matching SQLx migration for its test/runtime schema. This schema work does not yet claim that Anonymous or Principal HTTP invocation routes are wired or that replay-aware Valkey admission is complete.
