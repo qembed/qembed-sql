@@ -226,9 +226,9 @@ GRANT EXECUTE ON FUNCTION qembed_crypto.current_anonymous_fingerprint() TO qembe
 DO $definer_grants$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qembed_definer') THEN
-        GRANT EXECUTE ON FUNCTION qembed_crypto.current_subject_kind() TO qembed_definer;
-        GRANT EXECUTE ON FUNCTION qembed_crypto.current_object_id() TO qembed_definer;
-        GRANT EXECUTE ON FUNCTION qembed_crypto.current_anonymous_fingerprint() TO qembed_definer;
+        EXECUTE 'GRANT EXECUTE ON FUNCTION qembed_crypto.current_subject_kind() TO qembed_definer';
+        EXECUTE 'GRANT EXECUTE ON FUNCTION qembed_crypto.current_object_id() TO qembed_definer';
+        EXECUTE 'GRANT EXECUTE ON FUNCTION qembed_crypto.current_anonymous_fingerprint() TO qembed_definer';
     END IF;
 END
 $definer_grants$;
