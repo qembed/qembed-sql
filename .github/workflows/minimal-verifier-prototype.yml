@@ -2,7 +2,7 @@ name: QSA-003 minimal Ed25519 verifier PostgreSQL 19 prototype
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, prototype/qsa003-canonical-signed-context]
     paths:
       - ".github/workflows/minimal-verifier-prototype.yml"
       - "extensions/qembed_context_verify/**"
@@ -91,5 +91,73 @@ jobs:
           mkdir -p /tmp/qembed-context-corpus
           head -c 96 /dev/zero > /tmp/qembed-context-corpus/zero-signature-key
           /tmp/qembed-context-verify-fuzz \
-            -max_len=8288 -max_total_time=60 -timeout=2 \
+            -max_len=16384 -max_total_time=60 -timeout=2 \
             -print_final_stats=1 /tmp/qembed-context-corpus
+
+  verifier-libfuzzer-extended:
+    name: 10-minute ASan/UBSan libFuzzer campaign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Clang and libsodium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang libsodium-dev pkg-config
+
+      - name: Record fuzz environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/qsa003-fuzz-corpus" "$RUNNER_TEMP/qsa003-fuzz-crashes"
+          {
+            echo "commit=$GITHUB_SHA"
+            echo "runner=$RUNNER_OS"
+            echo "clang=$(clang --version | head -n 1)"
+            echo "libsodium=$(pkg-config --modversion libsodium)"
+            echo "kernel=$(uname -a)"
+          } | tee "$RUNNER_TEMP/qsa003-fuzz-environment.txt"
+
+      - name: Build production-shared verifier fuzz target
+        run: |
+          clang -std=c11 -O1 -g -fno-omit-frame-pointer \\
+            -fsanitize=fuzzer,address,undefined \\
+            -Iextensions/qembed_context_verify \\
+            tests/fuzz/qembed_context_verify_fuzz.c \\
+            -lsodium -o "$RUNNER_TEMP/qsa003-context-verify-fuzz"
+
+      - name: Seed valid, malformed, and boundary inputs
+        run: |
+          corpus="$RUNNER_TEMP/qsa003-fuzz-corpus"
+          xxd -r -p tests/fuzz/corpus/valid-empty-message.hex > "$corpus/valid-empty-message"
+          head -c 96 /dev/zero > "$corpus/zero-signature-and-key"
+          head -c 63 /dev/zero > "$corpus/truncated-signature"
+          head -c 95 /dev/zero > "$corpus/truncated-public-key"
+          head -c 8289 /dev/zero > "$corpus/oversized-message"
+
+      - name: Run extended sanitizer fuzz campaign
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/qsa003-context-verify-fuzz" \\
+            -max_len=16384 \\
+            -max_total_time=600 \\
+            -timeout=2 \\
+            -use_value_profile=1 \\
+            -print_final_stats=1 \\
+            -artifact_prefix="$RUNNER_TEMP/qsa003-fuzz-crashes/" \\
+            "$RUNNER_TEMP/qsa003-fuzz-corpus" \\
+            2>&1 | tee "$RUNNER_TEMP/qsa003-fuzz.log"
+
+      - name: Retain fuzz corpus, crash artifacts, and environment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qsa003-extended-fuzz-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/qsa003-fuzz-corpus/
+            ${{ runner.temp }}/qsa003-fuzz-crashes/
+            ${{ runner.temp }}/qsa003-fuzz.log
+            ${{ runner.temp }}/qsa003-fuzz-environment.txt
+          if-no-files-found: warn
+          retention-days: 90
