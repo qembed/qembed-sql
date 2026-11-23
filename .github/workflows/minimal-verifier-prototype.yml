@@ -10,6 +10,7 @@ on:
       - "tests/qembed_context_verify_pg19_probe.sql"
       - "tests/qembed_context_verify_transaction_setup.sql"
       - "tests/qembed_context_verify_transaction_probe.py"
+      - "migrations/rt059_anonymous_context_v2.sql"
       - "docs/QSA-003_MINIMAL_VERIFIER_PROTOTYPE.md"
   workflow_dispatch:
 
@@ -63,6 +64,9 @@ jobs:
           '
           docker exec --user postgres qembed-pg19-minimal \
             psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/qembed_context_verify_transaction_setup.sql
+          docker cp migrations/rt059_anonymous_context_v2.sql qembed-pg19-minimal:/tmp/rt059_anonymous_context_v2.sql
+          docker exec --user postgres qembed-pg19-minimal \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/rt059_anonymous_context_v2.sql
           docker exec --user postgres qembed-pg19-minimal \
             /tmp/issuer-venv/bin/python /tmp/qembed_context_verify_transaction_probe.py
       - name: Remove PostgreSQL container
