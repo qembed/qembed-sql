@@ -29,6 +29,19 @@ VALUES
  ('10000000-0000-0000-0000-000000000002',
   '40000000-0000-0000-0000-000000000002', 'draft');
 
+INSERT INTO object_versions
+ (tenant_id, object_id, object_version_id, version_number, status, published_at)
+VALUES
+ ('10000000-0000-0000-0000-000000000001',
+  '40000000-0000-0000-0000-000000000001',
+  '70000000-0000-0000-0000-000000000001', 1, 'published', now());
+
+UPDATE objects
+   SET state = 'active',
+       published_version_id = '70000000-0000-0000-0000-000000000001'
+ WHERE tenant_id = '10000000-0000-0000-0000-000000000001'
+   AND object_id = '40000000-0000-0000-0000-000000000001';
+
 INSERT INTO memories
  (id, tenant_id, object_id, caller_id, memory_kind, claim, source_kind,
   verification, confidence, expires_at)
