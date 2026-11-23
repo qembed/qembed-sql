@@ -87,3 +87,11 @@ SELECT tt.chk('RT-058 new Objects default to Anonymous invocation enabled',
      WHERE table_schema='public' AND table_name='objects'
        AND column_name='anonymous_invocation_enabled'$q$);
 
+SELECT tt.chk('RT-058 delegation revocation requires an actor',
+ $q$SELECT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = 'principal_caller_delegations'::regclass
+           AND conname = 'principal_caller_delegations_revocation_pair_check'
+           AND contype = 'c'
+      )$q$);
+
