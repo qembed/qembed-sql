@@ -57,7 +57,7 @@ jobs:
             '
           test -s "$RUNNER_TEMP/build-a/qembed_context_verify.so"
           test -s "$RUNNER_TEMP/build-a/toolchain.txt"
-          sha256sum "$RUNNER_TEMP/build-a/qembed_context_verify.so" \
+          (cd "$RUNNER_TEMP/build-a" && sha256sum qembed_context_verify.so) \
             > "$RUNNER_TEMP/build-a/sha256.txt"
 
       - uses: actions/upload-artifact@v4
@@ -108,7 +108,7 @@ jobs:
             '
           test -s "$RUNNER_TEMP/build-b/qembed_context_verify.so"
           test -s "$RUNNER_TEMP/build-b/toolchain.txt"
-          sha256sum "$RUNNER_TEMP/build-b/qembed_context_verify.so" \
+          (cd "$RUNNER_TEMP/build-b" && sha256sum qembed_context_verify.so) \
             > "$RUNNER_TEMP/build-b/sha256.txt"
 
       - uses: actions/upload-artifact@v4
