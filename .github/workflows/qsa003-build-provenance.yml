@@ -43,9 +43,7 @@ jobs:
               test "$(pg_config --version | cut -d" " -f1-2)" = "PostgreSQL 19.0"
               export ZERO_AR_DATE=1
               make -C extensions/qembed_context_verify clean
-              make -C extensions/qembed_context_verify \
-                PG_CONFIG="$(command -v pg_config)" \
-                PG_CFLAGS="-ffile-prefix-map=/workspace=."
+              make -C extensions/qembed_context_verify PG_CONFIG="$(command -v pg_config)"
               install -D extensions/qembed_context_verify/qembed_context_verify.so \
                 /out/qembed_context_verify.so
               {
@@ -96,9 +94,7 @@ jobs:
               test "$(pg_config --version | cut -d" " -f1-2)" = "PostgreSQL 19.0"
               export ZERO_AR_DATE=1
               make -C extensions/qembed_context_verify clean
-              make -C extensions/qembed_context_verify \
-                PG_CONFIG="$(command -v pg_config)" \
-                PG_CFLAGS="-ffile-prefix-map=/workspace=."
+              make -C extensions/qembed_context_verify PG_CONFIG="$(command -v pg_config)"
               install -D extensions/qembed_context_verify/qembed_context_verify.so \
                 /out/qembed_context_verify.so
               {
