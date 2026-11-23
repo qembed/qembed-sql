@@ -101,7 +101,7 @@ def issue_token(cursor, sign, overrides=None):
     now = dt.datetime.now(dt.timezone.utc)
     claims = {
         "version": "1",
-        "tenant_id": TENANT_A,
+        "tenant_id": tenant_id,
         "principal_id": PRINCIPAL,
         "caller_id": CALLER,
         "backend_pid": str(backend_pid),
@@ -125,7 +125,16 @@ def issue_token(cursor, sign, overrides=None):
     return payload, signature, claims, make_envelope(payload, signature)
 
 
-def issue_anonymous_token(cursor, sign, caller_id=None, overrides=None, remove_claims=None):
+def issue_anonymous_token(
+    cursor,
+    sign,
+    caller_id=None,
+    overrides=None,
+    remove_claims=None,
+    tenant_id=TENANT_A,
+    object_id=OBJECT,
+    subject_fingerprint=ANONYMOUS_FINGERPRINT,
+):
     cursor.execute(
         "SELECT pg_backend_pid(), pg_current_xact_id()::text, "
         "(SELECT oid::text FROM pg_database WHERE datname = current_database())"
@@ -138,8 +147,8 @@ def issue_anonymous_token(cursor, sign, caller_id=None, overrides=None, remove_c
         "principal_id": None,
         "caller_id": caller_id,
         "subject_kind": "anonymous",
-        "object_id": OBJECT,
-        "subject_fingerprint": ANONYMOUS_FINGERPRINT,
+        "object_id": object_id,
+        "subject_fingerprint": subject_fingerprint,
         "backend_pid": str(backend_pid),
         "transaction_id": str(transaction_id),
         "database_oid": str(database_oid),
@@ -484,6 +493,76 @@ def main():
         cursor.execute("SELECT qembed_crypto.current_caller_id()")
         if str(cursor.fetchone()[0]) != CALLER:
             raise AssertionError("qctx2 did not preserve the resolved Anonymous Caller")
+
+        # The Object has one generic Anonymous Caller. The subject fingerprint
+        # remains in qctx2/Valkey and is not persisted in the mapping table.
+        cursor.execute(
+            "SELECT set_config('app.context_token', %s, true)",
+            (anonymous_token,),
+        )
+        cursor.execute(
+            "SELECT qembed_crypto.get_or_create_anonymous_caller(%s::uuid, %s::uuid)",
+            (TENANT_A, OBJECT),
+        )
+        anonymous_caller_id = str(cursor.fetchone()[0])
+        _, _, _, resolved_object_token = issue_anonymous_token(
+            cursor, sign, caller_id=anonymous_caller_id
+        )
+        cursor.execute(
+            "SELECT set_config('app.context_token', %s, true)",
+            (resolved_object_token,),
+        )
+        cursor.execute(
+            "SELECT caller_id::text, caller_kind "
+            "FROM qembed_crypto.resolve_anonymous_caller(%s::uuid, %s::uuid, %s::uuid)",
+            (TENANT_A, OBJECT, anonymous_caller_id),
+        )
+        if cursor.fetchone() != (anonymous_caller_id, "Anonymous"):
+            raise AssertionError("Object Anonymous Caller did not resolve")
+
+        # A second fingerprint shares the Object-level Caller but remains a
+        # distinct rate-limit/idempotency subject at the application layer.
+        other_fingerprint = "cd" * 32
+        _, _, _, other_bootstrap_token = issue_anonymous_token(
+            cursor, sign, subject_fingerprint=other_fingerprint
+        )
+        cursor.execute(
+            "SELECT set_config('app.context_token', %s, true)",
+            (other_bootstrap_token,),
+        )
+        cursor.execute(
+            "SELECT qembed_crypto.get_or_create_anonymous_caller(%s::uuid, %s::uuid)",
+            (TENANT_A, OBJECT),
+        )
+        if str(cursor.fetchone()[0]) != anonymous_caller_id:
+            raise AssertionError("Object should reuse its single Anonymous Caller")
+
+        # A draft Object is not publicly invokable even though the schema flag
+        # defaults to true.
+        _, _, _, private_object_token = issue_anonymous_token(
+            cursor,
+            sign,
+            tenant_id=TENANT_B,
+            object_id="40000000-0000-0000-0000-000000000002",
+            subject_fingerprint="ef" * 32,
+        )
+        cursor.execute(
+            "SELECT set_config('app.context_token', %s, true)",
+            (private_object_token,),
+        )
+        cursor.execute("SAVEPOINT anonymous_private_object")
+        try:
+            cursor.execute(
+                "SELECT qembed_crypto.get_or_create_anonymous_caller(%s::uuid, %s::uuid)",
+                (TENANT_B, "40000000-0000-0000-0000-000000000002"),
+            )
+            raise AssertionError("draft Object unexpectedly accepted Anonymous invocation")
+        except psycopg2.Error as error:
+            if error.pgcode != "42501":
+                raise
+            cursor.execute("ROLLBACK TO SAVEPOINT anonymous_private_object")
+        cursor.execute("RELEASE SAVEPOINT anonymous_private_object")
+        cursor.execute("SELECT set_config('app.context_token', %s, true)", (token,))
 
         assert_invalid_anonymous(
             cursor, sign, "non-null Principal", overrides={"principal_id": PRINCIPAL}
