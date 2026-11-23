@@ -97,6 +97,7 @@ ALTER TABLE objects
 -- Delegations now target any active Principal in the same tenant. The actor
 -- that granted/revoked a delegation is recorded separately from its recipient.
 ALTER TABLE principal_caller_delegations
+    DROP CONSTRAINT IF EXISTS principal_caller_delegations_check,
     DROP CONSTRAINT IF EXISTS principal_caller_delegations_check1,
     DROP CONSTRAINT IF EXISTS principal_caller_delegations_principal_fk,
     DROP CONSTRAINT IF EXISTS principal_caller_delegations_revoker_fk,
@@ -109,7 +110,9 @@ ALTER TABLE principal_caller_delegations
         REFERENCES principals (tenant_id, id) ON DELETE RESTRICT,
     ADD CONSTRAINT principal_caller_delegations_revoker_fk
         FOREIGN KEY (tenant_id, revoked_by_principal_id)
-        REFERENCES principals (tenant_id, id) ON DELETE RESTRICT;
+        REFERENCES principals (tenant_id, id) ON DELETE RESTRICT,
+    ADD CONSTRAINT principal_caller_delegations_revocation_pair_check
+        CHECK ((revoked_at IS NULL) = (revoked_by_principal_id IS NULL));
 
 -- Remove the old self-delegation-only grant function. The two-argument form
 -- lets a TenantOwner grant a Caller to another Principal in the same tenant.
