@@ -5,6 +5,7 @@ on:
     branches: [master, "prototype/qsa003-canonical-signed-context"]
     paths:
       - ".github/workflows/qsa003-build-provenance.yml"
+      - "ci/qsa003-toolchain/**"
       - "extensions/qembed_context_verify/**"
       - "docs/QSA003_BUILD_PROVENANCE.md"
   workflow_dispatch:
@@ -12,19 +13,28 @@ on:
 permissions:
   contents: read
 
-env:
-  BUILD_IMAGE: pgvector/pgvector:0.8.7-pg19-bookworm@sha256:9fd1e61398799f1d6b64a852bce2bb59863c0ebbcd96178e20c7b10059e9ea5e
-
 jobs:
   build-a:
     name: Independent build A
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build verifier in pinned PostgreSQL 19 environment
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build verifier from archived toolchain
         shell: bash
+        env:
+          TOOLCHAIN_IMAGE: ghcr.io/qembed/qembed-sql/qsa003-toolchain@sha256:00058adbd06e8c28d00257af30fd75d60474e4d540e745c8c1420be8a6be912c
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/build-a"
@@ -34,31 +44,20 @@ jobs:
             --volume "$RUNNER_TEMP/build-a:/out" \
             --workdir /workspace \
             --env SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
-            --env BUILD_IMAGE="$BUILD_IMAGE" \
-            "$BUILD_IMAGE" -euo pipefail -c '
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                build-essential pkg-config libsodium-dev postgresql-server-dev-19
+            --env TOOLCHAIN_IMAGE="$TOOLCHAIN_IMAGE" \
+            "$TOOLCHAIN_IMAGE" -euo pipefail -c '
               test "$(pg_config --version | cut -d" " -f1-2)" = "PostgreSQL 19.0"
               export ZERO_AR_DATE=1
               make -C extensions/qembed_context_verify clean
               make -C extensions/qembed_context_verify PG_CONFIG="$(command -v pg_config)"
-              install -D extensions/qembed_context_verify/qembed_context_verify.so \
-                /out/qembed_context_verify.so
-              {
-                echo "base_image=$BUILD_IMAGE"
-                echo "source_date_epoch=$SOURCE_DATE_EPOCH"
-                echo "postgres=$(pg_config --version)"
-                echo "compiler=$(cc -dumpfullversion -dumpversion)"
-                echo "libsodium=$(pkg-config --modversion libsodium)"
-                dpkg-query -W -f="\${binary:Package}=\${Version}\n" | sort
-              } > /out/toolchain.txt
+              install -D extensions/qembed_context_verify/qembed_context_verify.so /out/qembed_context_verify.so
+              cat /opt/qsa003/toolchain/metadata.txt > /out/toolchain.txt
+              cat /opt/qsa003/toolchain/dpkg-packages.txt >> /out/toolchain.txt
+              echo "toolchain_image=$TOOLCHAIN_IMAGE" >> /out/toolchain.txt
             '
           test -s "$RUNNER_TEMP/build-a/qembed_context_verify.so"
           test -s "$RUNNER_TEMP/build-a/toolchain.txt"
-          (cd "$RUNNER_TEMP/build-a" && sha256sum qembed_context_verify.so) \
-            > "$RUNNER_TEMP/build-a/sha256.txt"
+          (cd "$RUNNER_TEMP/build-a" && sha256sum qembed_context_verify.so) > "$RUNNER_TEMP/build-a/sha256.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -71,11 +70,23 @@ jobs:
     name: Independent build B
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build verifier in pinned PostgreSQL 19 environment
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build verifier from archived toolchain
         shell: bash
+        env:
+          TOOLCHAIN_IMAGE: ghcr.io/qembed/qembed-sql/qsa003-toolchain@sha256:00058adbd06e8c28d00257af30fd75d60474e4d540e745c8c1420be8a6be912c
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/build-b"
@@ -85,31 +96,20 @@ jobs:
             --volume "$RUNNER_TEMP/build-b:/out" \
             --workdir /workspace \
             --env SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
-            --env BUILD_IMAGE="$BUILD_IMAGE" \
-            "$BUILD_IMAGE" -euo pipefail -c '
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                build-essential pkg-config libsodium-dev postgresql-server-dev-19
+            --env TOOLCHAIN_IMAGE="$TOOLCHAIN_IMAGE" \
+            "$TOOLCHAIN_IMAGE" -euo pipefail -c '
               test "$(pg_config --version | cut -d" " -f1-2)" = "PostgreSQL 19.0"
               export ZERO_AR_DATE=1
               make -C extensions/qembed_context_verify clean
               make -C extensions/qembed_context_verify PG_CONFIG="$(command -v pg_config)"
-              install -D extensions/qembed_context_verify/qembed_context_verify.so \
-                /out/qembed_context_verify.so
-              {
-                echo "base_image=$BUILD_IMAGE"
-                echo "source_date_epoch=$SOURCE_DATE_EPOCH"
-                echo "postgres=$(pg_config --version)"
-                echo "compiler=$(cc -dumpfullversion -dumpversion)"
-                echo "libsodium=$(pkg-config --modversion libsodium)"
-                dpkg-query -W -f="\${binary:Package}=\${Version}\n" | sort
-              } > /out/toolchain.txt
+              install -D extensions/qembed_context_verify/qembed_context_verify.so /out/qembed_context_verify.so
+              cat /opt/qsa003/toolchain/metadata.txt > /out/toolchain.txt
+              cat /opt/qsa003/toolchain/dpkg-packages.txt >> /out/toolchain.txt
+              echo "toolchain_image=$TOOLCHAIN_IMAGE" >> /out/toolchain.txt
             '
           test -s "$RUNNER_TEMP/build-b/qembed_context_verify.so"
           test -s "$RUNNER_TEMP/build-b/toolchain.txt"
-          (cd "$RUNNER_TEMP/build-b" && sha256sum qembed_context_verify.so) \
-            > "$RUNNER_TEMP/build-b/sha256.txt"
+          (cd "$RUNNER_TEMP/build-b" && sha256sum qembed_context_verify.so) > "$RUNNER_TEMP/build-b/sha256.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -140,7 +140,7 @@ jobs:
           name: qsa003-build-b
           path: verified/build-b
 
-      - name: Require identical binary and toolchain fingerprints
+      - name: Require identical binary and archived toolchain fingerprints
         shell: bash
         run: |
           set -euo pipefail
@@ -155,7 +155,7 @@ jobs:
             echo "source_ref=$GITHUB_REF"
             echo "binary_sha256=$(cut -d' ' -f1 verified/sha256.txt)"
             echo "independent_builds=2 separate GitHub-hosted runners"
-            echo "toolchain_match=byte-identical package and compiler fingerprint"
+            echo "toolchain_match=byte-identical archived OCI digest and package inventory"
             echo "binary_match=byte-identical shared object"
           } > verified/provenance-summary.txt
 
