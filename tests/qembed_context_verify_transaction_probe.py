@@ -143,7 +143,7 @@ def issue_anonymous_token(
     now = dt.datetime.now(dt.timezone.utc)
     claims = {
         "version": "2",
-        "tenant_id": TENANT_A,
+        "tenant_id": tenant_id,
         "principal_id": None,
         "caller_id": caller_id,
         "subject_kind": "anonymous",
