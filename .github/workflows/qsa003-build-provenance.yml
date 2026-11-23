@@ -54,7 +54,7 @@ jobs:
                 echo "postgres=$(pg_config --version)"
                 echo "compiler=$(cc -dumpfullversion -dumpversion)"
                 echo "libsodium=$(pkg-config --modversion libsodium)"
-                dpkg-query -W -f="${binary:Package}=${Version}\n" \
+                dpkg-query -W -f="\${binary:Package}=\${Version}\n" \
                   build-essential pkg-config libsodium-dev postgresql-server-dev-19 | sort
               } > /out/toolchain.txt
             '
@@ -108,7 +108,7 @@ jobs:
                 echo "postgres=$(pg_config --version)"
                 echo "compiler=$(cc -dumpfullversion -dumpversion)"
                 echo "libsodium=$(pkg-config --modversion libsodium)"
-                dpkg-query -W -f="${binary:Package}=${Version}\n" \
+                dpkg-query -W -f="\${binary:Package}=\${Version}\n" \
                   build-essential pkg-config libsodium-dev postgresql-server-dev-19 | sort
               } > /out/toolchain.txt
             '
