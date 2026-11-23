@@ -91,7 +91,8 @@ SELECT tt.chk('RT-058 delegation revocation requires an actor',
  $q$SELECT EXISTS (
         SELECT 1 FROM pg_constraint
          WHERE conrelid = 'principal_caller_delegations'::regclass
-           AND conname = 'principal_caller_delegations_revocation_pair_check'
            AND contype = 'c'
+           AND pg_get_constraintdef(oid) LIKE '%revoked_at IS NULL%'
+           AND pg_get_constraintdef(oid) LIKE '%revoked_by_principal_id IS NULL%'
       )$q$);
 
