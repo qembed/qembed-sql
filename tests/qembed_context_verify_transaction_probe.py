@@ -729,8 +729,9 @@ def main():
         connection.commit()
 
         print(
-            "PASS: qctx1 envelope, RFC 8785/JCS, typed claims, signature, transaction/backend "
-            "binding, replay, savepoint, READ ONLY, RLS, least privilege, and GUC capacity"
+            "PASS: qctx1/qctx2 envelopes, RFC 8785/JCS, strict typed claims, signature, "
+            "transaction/backend binding, replay, savepoint, READ ONLY, RLS, least privilege, "
+            "and GUC capacity"
         )
     finally:
         cursor.close()
