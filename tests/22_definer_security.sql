@@ -118,6 +118,7 @@ SELECT tt.chk('QSA-001 worker role is isolated and has only worker entry points'
        AND NOT has_function_privilege('qembed_worker','public.retention_purge(text,timestamptz,text)','EXECUTE')
        AND NOT has_function_privilege('qembed_worker','public.authenticate_principal(bytea)','EXECUTE')
        AND NOT has_function_privilege('qembed_worker','public.grant_caller_delegation(uuid)','EXECUTE')
+       AND NOT has_function_privilege('qembed_worker','public.grant_caller_delegation(uuid,uuid)','EXECUTE')
        AND NOT has_function_privilege('qembed_worker','public.resolve_delegated_caller(uuid)','EXECUTE')
        FROM pg_roles WHERE rolname='qembed_worker'$q$);
 SELECT tt.chk('QSA-001 worker has no direct tenant data table access',
@@ -198,7 +199,7 @@ SELECT tt.chk('QSA-002 embedding and published-pointer trigger guards pin pg_tem
           FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='object_published_pointer_guard')$q$);
 
 SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PUBLIC-executable',
-  $q$SELECT count(*)=11 AND bool_and(
+  $q$SELECT count(*)=12 AND bool_and(
        pg_get_userbyid(proowner)='qembed_definer'
        AND prosecdef
        AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
@@ -214,6 +215,7 @@ SELECT tt.chk('QSA-001 runtime has only tenant-scoped operational definer entry 
   $q$SELECT
        has_function_privilege('qembed_runtime','public.authenticate_principal(bytea)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.grant_caller_delegation(uuid)','EXECUTE')
+       AND has_function_privilege('qembed_runtime','public.grant_caller_delegation(uuid,uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.revoke_caller_delegation(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.resolve_delegated_caller(uuid)','EXECUTE')
        AND has_function_privilege('qembed_runtime','public.resolve_object_tenant(uuid,uuid)','EXECUTE')
