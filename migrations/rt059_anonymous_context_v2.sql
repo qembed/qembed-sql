@@ -7,8 +7,7 @@ BEGIN
     IF to_regprocedure('qembed_crypto.verified_context(text)') IS NULL
        OR to_regclass('qembed_crypto.verification_keys') IS NULL
        OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qembed_key_registry_owner')
-       OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qembed_runtime')
-       OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qembed_definer') THEN
+       OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qembed_runtime') THEN
         RAISE EXCEPTION 'RT-059 requires the RT-050 signed-context verifier and roles';
     END IF;
 END
@@ -220,8 +219,18 @@ REVOKE ALL ON FUNCTION qembed_crypto.current_subject_kind() FROM PUBLIC;
 REVOKE ALL ON FUNCTION qembed_crypto.current_object_id() FROM PUBLIC;
 REVOKE ALL ON FUNCTION qembed_crypto.current_anonymous_fingerprint() FROM PUBLIC;
 
-GRANT EXECUTE ON FUNCTION qembed_crypto.current_subject_kind() TO qembed_runtime, qembed_definer;
-GRANT EXECUTE ON FUNCTION qembed_crypto.current_object_id() TO qembed_runtime, qembed_definer;
-GRANT EXECUTE ON FUNCTION qembed_crypto.current_anonymous_fingerprint() TO qembed_runtime, qembed_definer;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_subject_kind() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_object_id() TO qembed_runtime;
+GRANT EXECUTE ON FUNCTION qembed_crypto.current_anonymous_fingerprint() TO qembed_runtime;
+
+DO $definer_grants$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qembed_definer') THEN
+        GRANT EXECUTE ON FUNCTION qembed_crypto.current_subject_kind() TO qembed_definer;
+        GRANT EXECUTE ON FUNCTION qembed_crypto.current_object_id() TO qembed_definer;
+        GRANT EXECUTE ON FUNCTION qembed_crypto.current_anonymous_fingerprint() TO qembed_definer;
+    END IF;
+END
+$definer_grants$;
 
 COMMIT;
