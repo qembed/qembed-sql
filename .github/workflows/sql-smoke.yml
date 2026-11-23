@@ -49,6 +49,17 @@ jobs:
           PGPASSWORD: migrator
           DB: qembed_smoke
         run: bash tests/run_smoke.sh
+      - name: Build signed-context PostgreSQL verifier for RT-058 migration smoke
+        run: |
+          docker exec --user root qembed-postgres bash -euxc '
+            apt-get update
+            apt-get install -y --no-install-recommends build-essential pkg-config libsodium-dev postgresql-server-dev-19
+          '
+          docker cp extensions/qembed_context_verify qembed-postgres:/tmp/qembed_context_verify
+          docker exec --user root qembed-postgres bash -euxc '
+            make -C /tmp/qembed_context_verify PG_CONFIG="$(command -v pg_config)"
+            make -C /tmp/qembed_context_verify PG_CONFIG="$(command -v pg_config)" install
+          '
       - name: Run RT-058 incremental migration smoke
         env:
           PGHOST: 127.0.0.1
