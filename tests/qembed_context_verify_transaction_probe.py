@@ -21,10 +21,16 @@ TENANT_B = "10000000-0000-0000-0000-000000000002"
 PRINCIPAL = "20000000-0000-0000-0000-000000000001"
 CALLER = "30000000-0000-0000-0000-000000000001"
 CALLER_B = "30000000-0000-0000-0000-000000000002"
+OBJECT = "40000000-0000-0000-0000-000000000001"
+ANONYMOUS_FINGERPRINT = "ab" * 32
 
 
 def connect():
-    return psycopg2.connect(dbname="postgres", user="postgres", host="/var/run/postgresql")
+    return psycopg2.connect(
+        dbname=os.environ.get("PGDATABASE", "postgres"),
+        user="postgres",
+        host="/var/run/postgresql",
+    )
 
 
 def load_sodium():
@@ -82,8 +88,8 @@ def utc_text(value):
     return text + "Z"
 
 
-def make_envelope(payload, signature):
-    return f"qctx1:{payload.hex()}:{signature.hex()}"
+def make_envelope(payload, signature, prefix="qctx1"):
+    return f"{prefix}:{payload.hex()}:{signature.hex()}"
 
 
 def issue_token(cursor, sign, overrides=None):
@@ -117,6 +123,41 @@ def issue_token(cursor, sign, overrides=None):
     payload = rfc8785.dumps(claims)
     signature = sign(payload)
     return payload, signature, claims, make_envelope(payload, signature)
+
+
+def issue_anonymous_token(cursor, sign, caller_id=None, overrides=None, remove_claims=None):
+    cursor.execute(
+        "SELECT pg_backend_pid(), pg_current_xact_id()::text, "
+        "(SELECT oid::text FROM pg_database WHERE datname = current_database())"
+    )
+    backend_pid, transaction_id, database_oid = cursor.fetchone()
+    now = dt.datetime.now(dt.timezone.utc)
+    claims = {
+        "version": "2",
+        "tenant_id": TENANT_A,
+        "principal_id": None,
+        "caller_id": caller_id,
+        "subject_kind": "anonymous",
+        "object_id": OBJECT,
+        "subject_fingerprint": ANONYMOUS_FINGERPRINT,
+        "backend_pid": str(backend_pid),
+        "transaction_id": str(transaction_id),
+        "database_oid": str(database_oid),
+        "deployment_id": DEPLOYMENT,
+        "issuer": ISSUER,
+        "audience": f"{AUDIENCE_PREFIX}{DEPLOYMENT}:database:{database_oid}",
+        "key_id": KEY_ID,
+        "issued_at": utc_text(now),
+        "expires_at": utc_text(now + dt.timedelta(seconds=30)),
+        "nonce": str(uuid.uuid4()),
+    }
+    if overrides:
+        claims.update(overrides)
+    for claim in remove_claims or []:
+        claims.pop(claim, None)
+    payload = rfc8785.dumps(claims)
+    signature = sign(payload)
+    return payload, signature, claims, make_envelope(payload, signature, "qctx2")
 
 
 def verify(cursor, token):
