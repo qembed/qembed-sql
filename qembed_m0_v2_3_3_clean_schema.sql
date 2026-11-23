@@ -173,6 +173,39 @@ END $$;
 CREATE TRIGGER trg_owner_credentials_guard BEFORE UPDATE ON owner_credentials
   FOR EACH ROW EXECUTE FUNCTION owner_credentials_guard();
 
+-- Keep the legacy Owner API identity aligned with the canonical Principal registry.
+-- The synthetic key hash is not a credential; Owner authentication still uses
+-- owner_credentials until that compatibility path is retired.
+INSERT INTO principals (id, tenant_id, kind, key_hash, revoked_at)
+SELECT caller_id, tenant_id, 'TenantOwner',
+       digest('legacy-owner-principal:' || tenant_id::text || ':' || caller_id::text, 'sha256'),
+       disabled_at
+  FROM owner_principals
+ON CONFLICT (id) DO NOTHING;
+
+CREATE FUNCTION sync_legacy_owner_principal() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $sync_legacy_owner_principal$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO principals (id, tenant_id, kind, key_hash, revoked_at)
+    VALUES (NEW.caller_id, NEW.tenant_id, 'TenantOwner',
+            digest('legacy-owner-principal:' || NEW.tenant_id::text || ':' || NEW.caller_id::text, 'sha256'),
+            NEW.disabled_at)
+    ON CONFLICT (id) DO NOTHING;
+    RETURN NEW;
+  END IF;
+  IF NEW.disabled_at IS DISTINCT FROM OLD.disabled_at THEN
+    UPDATE principals SET revoked_at = NEW.disabled_at
+     WHERE id = NEW.caller_id AND tenant_id = NEW.tenant_id AND kind = 'TenantOwner'
+       AND (revoked_at IS NULL OR NEW.disabled_at IS NOT NULL);
+  END IF;
+  RETURN NEW;
+END
+$sync_legacy_owner_principal$;
+CREATE TRIGGER trg_sync_legacy_owner_principal
+  AFTER INSERT OR UPDATE OF disabled_at ON owner_principals
+  FOR EACH ROW EXECUTE FUNCTION sync_legacy_owner_principal();
+
 -- -----------------------------------------------------------------------------
 -- 4. Objects and versions
 -- -----------------------------------------------------------------------------
@@ -1416,6 +1449,7 @@ CREATE POLICY own_tenant ON principals FOR SELECT TO qembed_runtime
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY admin_all ON principals TO qembed_admin USING (true) WITH CHECK (true);
 CREATE POLICY definer_auth ON principals FOR SELECT TO qembed_definer USING (true);
+CREATE POLICY definer_owner_sync ON principals FOR ALL TO qembed_definer USING (true) WITH CHECK (true);
 
 CREATE POLICY ks_read ON kill_switches FOR SELECT TO qembed_runtime
   USING (tenant_id IS NULL OR tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
@@ -1932,6 +1966,7 @@ GRANT EXECUTE ON FUNCTION retention_purge(text,timestamptz,text) TO qembed_reten
 
 -- definer: privileges needed by function bodies (narrow to column grants in review)
 GRANT SELECT ON principals, owner_principals, objects, object_invocations, callers TO qembed_definer;
+GRANT INSERT, UPDATE ON principals TO qembed_definer;
 GRANT UPDATE (disabled_at) ON owner_principals TO qembed_definer; -- row lock for invocation-time resolution
 GRANT UPDATE (revoked_at) ON callers TO qembed_definer;          -- row lock for invocation-time resolution
 GRANT SELECT, INSERT, UPDATE ON principal_caller_delegations TO qembed_definer;
