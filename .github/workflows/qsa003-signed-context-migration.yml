@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/qsa003-signed-context-migration.yml"
       - "migrations/rt050_signed_context_rls.sql"
+      - "migrations/rt059_anonymous_context_v2.sql"
       - "qembed_m0_v2_3_3_clean_schema.sql"
       - "extensions/qembed_context_verify/**"
       - "tests/qembed_context_verify_transaction_setup.sql"
@@ -15,7 +16,7 @@ on:
 
 jobs:
   canonical-rls-migration:
-    name: PostgreSQL 19 canonical schema + qctx1 RLS migration
+    name: PostgreSQL 19 canonical schema + qctx1/qctx2 RLS migration
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -68,7 +69,12 @@ jobs:
           docker cp migrations/rt050_signed_context_rls.sql qembed-qsa003-pg19:/tmp/rt050_signed_context_rls.sql
           docker exec --user postgres qembed-qsa003-pg19 \
             psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/rt050_signed_context_rls.sql
-      - name: Verify canonical RLS, delegation authority, Principal-only behavior and replay
+      - name: Apply Anonymous signed-context v2 migration
+        run: |
+          docker cp migrations/rt059_anonymous_context_v2.sql qembed-qsa003-pg19:/tmp/rt059_anonymous_context_v2.sql
+          docker exec --user postgres qembed-qsa003-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/rt059_anonymous_context_v2.sql
+      - name: Verify canonical RLS, Principal-only behavior, qctx2 Anonymous identity and replay
         run: |
           docker cp tests/qembed_context_verify_transaction_probe.py qembed-qsa003-pg19:/tmp/qembed_context_verify_transaction_probe.py
           docker exec --user postgres qembed-qsa003-pg19 bash -euxc '

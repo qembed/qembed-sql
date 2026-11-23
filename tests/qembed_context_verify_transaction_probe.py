@@ -21,10 +21,16 @@ TENANT_B = "10000000-0000-0000-0000-000000000002"
 PRINCIPAL = "20000000-0000-0000-0000-000000000001"
 CALLER = "30000000-0000-0000-0000-000000000001"
 CALLER_B = "30000000-0000-0000-0000-000000000002"
+OBJECT = "40000000-0000-0000-0000-000000000001"
+ANONYMOUS_FINGERPRINT = "ab" * 32
 
 
 def connect():
-    return psycopg2.connect(dbname="postgres", user="postgres", host="/var/run/postgresql")
+    return psycopg2.connect(
+        dbname=os.environ.get("PGDATABASE", "postgres"),
+        user="postgres",
+        host="/var/run/postgresql",
+    )
 
 
 def load_sodium():
@@ -82,8 +88,8 @@ def utc_text(value):
     return text + "Z"
 
 
-def make_envelope(payload, signature):
-    return f"qctx1:{payload.hex()}:{signature.hex()}"
+def make_envelope(payload, signature, prefix="qctx1"):
+    return f"{prefix}:{payload.hex()}:{signature.hex()}"
 
 
 def issue_token(cursor, sign, overrides=None):
@@ -119,6 +125,41 @@ def issue_token(cursor, sign, overrides=None):
     return payload, signature, claims, make_envelope(payload, signature)
 
 
+def issue_anonymous_token(cursor, sign, caller_id=None, overrides=None, remove_claims=None):
+    cursor.execute(
+        "SELECT pg_backend_pid(), pg_current_xact_id()::text, "
+        "(SELECT oid::text FROM pg_database WHERE datname = current_database())"
+    )
+    backend_pid, transaction_id, database_oid = cursor.fetchone()
+    now = dt.datetime.now(dt.timezone.utc)
+    claims = {
+        "version": "2",
+        "tenant_id": TENANT_A,
+        "principal_id": None,
+        "caller_id": caller_id,
+        "subject_kind": "anonymous",
+        "object_id": OBJECT,
+        "subject_fingerprint": ANONYMOUS_FINGERPRINT,
+        "backend_pid": str(backend_pid),
+        "transaction_id": str(transaction_id),
+        "database_oid": str(database_oid),
+        "deployment_id": DEPLOYMENT,
+        "issuer": ISSUER,
+        "audience": f"{AUDIENCE_PREFIX}{DEPLOYMENT}:database:{database_oid}",
+        "key_id": KEY_ID,
+        "issued_at": utc_text(now),
+        "expires_at": utc_text(now + dt.timedelta(seconds=30)),
+        "nonce": str(uuid.uuid4()),
+    }
+    if overrides:
+        claims.update(overrides)
+    for claim in remove_claims or []:
+        claims.pop(claim, None)
+    payload = rfc8785.dumps(claims)
+    signature = sign(payload)
+    return payload, signature, claims, make_envelope(payload, signature, "qctx2")
+
+
 def verify(cursor, token):
     cursor.execute("SELECT qembed_crypto.verified_context(%s)", (token,))
     return cursor.fetchone()[0]
@@ -136,6 +177,15 @@ def assert_invalid(
     result = verify(cursor, token)
     if result is not None:
         raise AssertionError(f"invalid context accepted: {label}")
+
+
+def assert_invalid_anonymous(cursor, sign, label, overrides=None, remove_claims=None):
+    _, _, _, token = issue_anonymous_token(
+        cursor, sign, overrides=overrides, remove_claims=remove_claims
+    )
+    result = verify(cursor, token)
+    if result is not None:
+        raise AssertionError(f"invalid Anonymous context accepted: {label}")
 
 
 def main():
@@ -402,6 +452,63 @@ def main():
             cursor.execute("SELECT count(*) FROM objects")
             if cursor.fetchone()[0] != 1:
                 raise AssertionError("Principal-only token lost tenant-scoped object visibility")
+        # qctx2 is a distinct exact claim shape: Anonymous has no Principal,
+        # and the signed object/fingerprint bind the unauthenticated subject.
+        _, _, anonymous_claims, anonymous_token = issue_anonymous_token(cursor, sign)
+        if verify(cursor, anonymous_token) != anonymous_claims:
+            raise AssertionError("valid qctx2 Anonymous context was not accepted")
+        cursor.execute("SELECT set_config('app.context_token', %s, true)", (anonymous_token,))
+        cursor.execute(
+            "SELECT qembed_crypto.current_tenant_id(), "
+            "qembed_crypto.current_principal_id(), qembed_crypto.current_caller_id(), "
+            "qembed_crypto.current_subject_kind(), qembed_crypto.current_object_id(), "
+            "qembed_crypto.current_anonymous_fingerprint()"
+        )
+        anonymous_identity = cursor.fetchone()
+        if (
+            str(anonymous_identity[0]) != TENANT_A
+            or anonymous_identity[1] is not None
+            or anonymous_identity[2] is not None
+            or anonymous_identity[3] != "anonymous"
+            or str(anonymous_identity[4]) != OBJECT
+            or bytes(anonymous_identity[5]) != bytes.fromhex(ANONYMOUS_FINGERPRINT)
+        ):
+            raise AssertionError("qctx2 typed accessors returned incorrect Anonymous identity")
+        _, _, _, resolved_anonymous_token = issue_anonymous_token(
+            cursor, sign, caller_id=CALLER
+        )
+        cursor.execute(
+            "SELECT set_config('app.context_token', %s, true)",
+            (resolved_anonymous_token,),
+        )
+        cursor.execute("SELECT qembed_crypto.current_caller_id()")
+        if str(cursor.fetchone()[0]) != CALLER:
+            raise AssertionError("qctx2 did not preserve the resolved Anonymous Caller")
+
+        assert_invalid_anonymous(
+            cursor, sign, "non-null Principal", overrides={"principal_id": PRINCIPAL}
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "missing Principal claim", remove_claims=["principal_id"]
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "wrong subject kind", overrides={"subject_kind": "authenticated"}
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "malformed object ID", overrides={"object_id": "not-a-uuid"}
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "malformed subject fingerprint", overrides={"subject_fingerprint": "xyz"}
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "missing caller claim", remove_claims=["caller_id"]
+        )
+        assert_invalid_anonymous(
+            cursor, sign, "extra claim", overrides={"unrecognized": "must-fail"}
+        )
+        if verify(cursor, anonymous_token.replace("qctx2:", "qctx1:", 1)) is not None:
+            raise AssertionError("qctx2 payload was accepted under a qctx1 envelope")
+
         cursor.execute("SELECT set_config('app.context_token', %s, true)", (token,))
 
         cursor.execute(
@@ -622,8 +729,9 @@ def main():
         connection.commit()
 
         print(
-            "PASS: qctx1 envelope, RFC 8785/JCS, typed claims, signature, transaction/backend "
-            "binding, replay, savepoint, READ ONLY, RLS, least privilege, and GUC capacity"
+            "PASS: qctx1/qctx2 envelopes, RFC 8785/JCS, strict typed claims, signature, "
+            "transaction/backend binding, replay, savepoint, READ ONLY, RLS, least privilege, "
+            "and GUC capacity"
         )
     finally:
         cursor.close()
