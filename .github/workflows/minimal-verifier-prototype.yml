@@ -127,10 +127,10 @@ jobs:
 
       - name: Build production-shared verifier fuzz target
         run: |
-          clang -std=c11 -O1 -g -fno-omit-frame-pointer \\
-            -fsanitize=fuzzer,address,undefined \\
-            -Iextensions/qembed_context_verify \\
-            tests/fuzz/qembed_context_verify_fuzz.c \\
+          clang -std=c11 -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=fuzzer,address,undefined \
+            -Iextensions/qembed_context_verify \
+            tests/fuzz/qembed_context_verify_fuzz.c \
             -lsodium -o "$RUNNER_TEMP/qsa003-context-verify-fuzz"
 
       - name: Seed valid, malformed, and boundary inputs
@@ -146,14 +146,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/qsa003-context-verify-fuzz" \\
-            -max_len=16384 \\
-            -max_total_time=600 \\
-            -timeout=2 \\
-            -use_value_profile=1 \\
-            -print_final_stats=1 \\
-            -artifact_prefix="$RUNNER_TEMP/qsa003-fuzz-crashes/" \\
-            "$RUNNER_TEMP/qsa003-fuzz-corpus" \\
+          "$RUNNER_TEMP/qsa003-context-verify-fuzz" \
+            -max_len=16384 \
+            -max_total_time=600 \
+            -timeout=2 \
+            -use_value_profile=1 \
+            -print_final_stats=1 \
+            -artifact_prefix="$RUNNER_TEMP/qsa003-fuzz-crashes/" \
+            "$RUNNER_TEMP/qsa003-fuzz-corpus" \
             2>&1 | tee "$RUNNER_TEMP/qsa003-fuzz.log"
 
       - name: Retain fuzz corpus, crash artifacts, and environment
