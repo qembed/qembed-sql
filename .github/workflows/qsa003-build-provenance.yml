@@ -86,7 +86,7 @@ jobs:
       - name: Build verifier from archived toolchain
         shell: bash
         env:
-          TOOLCHAIN_IMAGE: ${{ needs.publish-toolchain.outputs.image }}
+          TOOLCHAIN_IMAGE: ghcr.io/qembed/qembed-sql/qsa003-toolchain@sha256:00058adbd06e8c28d00257af30fd75d60474e4d540e745c8c1420be8a6be912c
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/build-b"
