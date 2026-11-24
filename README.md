@@ -222,3 +222,8 @@ Approved contract: for the same tenant/object, an exact canonical-byte match ret
 - The SQL smoke test `tests/07_principal_caller_delegation.sql` covers Owner-to-Principal grants, TenantAdmin/Service resolution, Owner-only grant/revoke, cross-tenant rejection, and the public-by-default column contract.
 
 The SQL migration must be applied after RT-050 signed-context setup. The Rust repository carries the matching SQLx migration for its test/runtime schema. This schema work does not yet claim that Anonymous or Principal HTTP invocation routes are wired or that replay-aware Valkey admission is complete.
+
+
+## RUST-061 — External Caller Deletion Ledger
+
+`migrations/rt061_control_plane_caller_deletion_ledger.sql` is a standalone migration for the dedicated Control-plane PostgreSQL database. Apply it independently from `qembed_m0_v2_3_3_clean_schema.sql`; it creates the append-only, data-minimized HMAC tombstone store and its restricted runtime role. The Runtime-local `deletion_ledger` is not an authoritative restore source.
