@@ -70,3 +70,11 @@ jobs:
           PGPASSWORD: migrator
           DB: qembed_rt058_migration
         run: bash tests/run_rt058_migration_smoke.sh
+      - name: Run RT-061 caller erasure and restore replay smoke
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: qembed_migrator
+          PGPASSWORD: migrator
+          DB: qembed_rt061_migration
+        run: bash tests/run_rt061_migration_smoke.sh

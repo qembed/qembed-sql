@@ -227,3 +227,22 @@ The SQL migration must be applied after RT-050 signed-context setup. The Rust re
 ## RUST-061 — External Caller Deletion Ledger
 
 `migrations/rt061_control_plane_caller_deletion_ledger.sql` is a standalone migration for the dedicated Control-plane PostgreSQL database. Apply it independently from `qembed_m0_v2_3_3_clean_schema.sql`; it creates the append-only, data-minimized HMAC tombstone store and its restricted runtime role. The Runtime-local `deletion_ledger` is not an authoritative restore source.
+
+
+## RUST-061 — Runtime Caller erasure and restore replay
+
+Apply `migrations/rt061_runtime_caller_erasure.sql` to the Runtime database after
+RT-050/RT-058/RT-059/RT-060. It installs tenant-scoped Caller revocation and
+erasure functions plus the narrowly privileged `qembed_restore` role. The
+normal runtime role can only request/complete erasure for its signed tenant;
+the restore role can only execute HMAC-based replay and has no direct table
+access. In-flight invocations/tool executions are cancellation-requested and
+physical erasure remains pending until they reach terminal states.
+
+The dedicated Control-plane database is provisioned separately with
+`migrations/rt061_control_plane_caller_deletion_ledger.sql`. The two migrations
+must not be applied to the same database.
+
+`tests/run_rt061_migration_smoke.sh` applies the Runtime migration to a clean
+database and exercises completed-work erasure, in-flight cancellation deferral,
+and subsequent replay completion.
