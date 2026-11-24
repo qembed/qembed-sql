@@ -23,6 +23,7 @@ $P -f ../migrations/rt060_anonymous_object_caller.sql
 $P -f ../migrations/rt061_runtime_caller_erasure.sql
 $P -f ../migrations/rt061b_verified_caller_erasure.sql
 $P -f ../migrations/rt061c_cancelled_tool_execution_erasure.sql
+$P -c "SELECT qembed_crypto.caller_deletion_schema_version() = 3"
 $P -f ../tests/rt061_caller_erasure.sql
 
 echo "RT-061 Runtime erasure and restore replay smoke passed"
