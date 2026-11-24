@@ -240,7 +240,8 @@ source.
 
 Apply `migrations/rt061_runtime_caller_erasure.sql` to the Runtime database after
 RT-050/RT-058/RT-059/RT-060, followed by
-`migrations/rt061b_verified_caller_erasure.sql`. These install tenant-scoped
+`migrations/rt061b_verified_caller_erasure.sql` and
+`migrations/rt061c_cancelled_tool_execution_erasure.sql`. These install tenant-scoped
 Caller revocation, cancellation propagation, and verified erasure functions,
 plus the narrowly privileged `qembed_restore` role. The normal runtime role
 can only request/complete erasure for its signed tenant; the restore role can
