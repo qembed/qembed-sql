@@ -152,4 +152,20 @@ GRANT EXECUTE ON FUNCTION qembed_crypto.erase_caller_data(UUID, UUID) TO qembed_
 GRANT EXECUTE ON FUNCTION qembed_crypto.replay_caller_deletion(UUID, BYTEA, TEXT, BYTEA)
     TO qembed_restore;
 
+CREATE OR REPLACE FUNCTION qembed_crypto.caller_deletion_schema_version()
+RETURNS SMALLINT
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+SECURITY DEFINER
+SET search_path = pg_catalog, qembed_crypto
+AS $caller_deletion_schema_version$
+    SELECT 3::SMALLINT
+$caller_deletion_schema_version$;
+
+ALTER FUNCTION qembed_crypto.caller_deletion_schema_version() OWNER TO qembed_definer;
+REVOKE ALL ON FUNCTION qembed_crypto.caller_deletion_schema_version() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION qembed_crypto.caller_deletion_schema_version()
+    TO qembed_runtime, qembed_restore;
+
 COMMIT;
