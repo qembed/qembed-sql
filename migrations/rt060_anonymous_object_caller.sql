@@ -117,11 +117,12 @@ BEGIN
     VALUES (p_tenant_id, p_object_id, v_caller_id)
     ON CONFLICT (tenant_id, object_id) DO NOTHING;
 
+    -- The mapping table is insert-only to this definer and has no UPDATE/
+    -- DELETE grant; a plain read is sufficient after ON CONFLICT serialization.
     SELECT caller_id INTO v_mapped_caller_id
       FROM object_anonymous_callers
      WHERE tenant_id = p_tenant_id
-       AND object_id = p_object_id
-     FOR SHARE;
+       AND object_id = p_object_id;
     IF v_mapped_caller_id IS DISTINCT FROM v_caller_id THEN
         RAISE EXCEPTION 'Object Anonymous Caller mapping is inconsistent'
             USING ERRCODE = '23505';
@@ -170,11 +171,11 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
+    -- Mapping rows are immutable by privilege boundary (no UPDATE/DELETE).
     SELECT mapping.caller_id INTO v_mapped_caller_id
       FROM object_anonymous_callers AS mapping
      WHERE mapping.tenant_id = p_tenant_id
-       AND mapping.object_id = p_object_id
-     FOR SHARE;
+       AND mapping.object_id = p_object_id;
     IF NOT FOUND OR v_mapped_caller_id IS DISTINCT FROM p_caller_id THEN
         RAISE EXCEPTION 'Anonymous Caller is not registered for this Object'
             USING ERRCODE = '42501';
