@@ -37,9 +37,11 @@ check "one-argument call remains compatible through the default cutoff" \
 check "explicit cutoff call is available to worker" \
   "SELECT sweep_expired_reservations(10, '2026-01-03 00:00:00+00'::timestamptz) = 0"
 
-if $P -c "SELECT sweep_expired_reservations(0)" >/dev/null 2>&1; then
-  echo "RT-062 migration smoke failed: zero batch size was accepted" >&2
-  exit 1
-fi
+for invalid_batch in "0" "501" "NULL"; do
+  if $P -c "SELECT sweep_expired_reservations(${invalid_batch})" >/dev/null 2>&1; then
+    echo "RT-062 migration smoke failed: invalid batch size ${invalid_batch} was accepted" >&2
+    exit 1
+  fi
+done
 
 echo "RT-062 deterministic reservation sweeper migration smoke passed"
