@@ -1773,7 +1773,7 @@ CREATE FUNCTION sweep_expired_reservations(
   p_limit INT,
   p_now TIMESTAMPTZ DEFAULT clock_timestamp()
 ) RETURNS INT
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $rust062$
 DECLARE r RECORD; n INT := 0;
 BEGIN
   IF p_limit < 1 OR p_limit > 500 THEN
@@ -1808,7 +1808,7 @@ BEGIN
     n := n + 1;
   END LOOP;
   RETURN n;
-END $$;
+END $rust062$;
 
 -- PostgreSQL-driven replay for queued invocations whose progress deadline elapsed.
 -- The function is tenant-scoped through the trusted transaction-local app.tenant_id.
