@@ -42,6 +42,9 @@ GRANT SELECT, INSERT ON object_anonymous_callers TO qembed_definer;
 -- SECURITY DEFINER routines lock Object and Caller lifecycle rows before returning
 -- the Anonymous Caller; the runtime role receives no direct table access.
 GRANT SELECT ON objects, callers TO qembed_definer;
+-- SELECT ... FOR SHARE requires UPDATE privilege; object_id is immutable under
+-- the canonical trigger, so this grants row-lock capability without mutation.
+GRANT UPDATE (object_id) ON objects TO qembed_definer;
 GRANT INSERT ON callers TO qembed_definer;
 
 CREATE FUNCTION qembed_crypto.get_or_create_anonymous_caller(
