@@ -15,7 +15,7 @@ DECLARE
   r RECORD;
   n INT := 0;
 BEGIN
-  IF p_limit < 1 OR p_limit > 500 THEN
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > 500 THEN
     RAISE EXCEPTION 'reservation sweep batch size must be between 1 and 500'
       USING ERRCODE = '22023';
   END IF;
