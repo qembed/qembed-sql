@@ -7,6 +7,7 @@ on:
       - ".github/workflows/qsa003-signed-context-migration.yml"
       - "migrations/rt050_signed_context_rls.sql"
       - "migrations/rt059_anonymous_context_v2.sql"
+      - "migrations/rt060_anonymous_object_caller.sql"
       - "qembed_m0_v2_3_3_clean_schema.sql"
       - "extensions/qembed_context_verify/**"
       - "tests/qembed_context_verify_transaction_setup.sql"
@@ -74,6 +75,11 @@ jobs:
           docker cp migrations/rt059_anonymous_context_v2.sql qembed-qsa003-pg19:/tmp/rt059_anonymous_context_v2.sql
           docker exec --user postgres qembed-qsa003-pg19 \
             psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/rt059_anonymous_context_v2.sql
+      - name: Apply Object-scoped Anonymous Caller migration
+        run: |
+          docker cp migrations/rt060_anonymous_object_caller.sql qembed-qsa003-pg19:/tmp/rt060_anonymous_object_caller.sql
+          docker exec --user postgres qembed-qsa003-pg19 \
+            psql -X -v ON_ERROR_STOP=1 -d postgres -f /tmp/rt060_anonymous_object_caller.sql
       - name: Verify canonical RLS, Principal-only behavior, qctx2 Anonymous identity and replay
         run: |
           docker cp tests/qembed_context_verify_transaction_probe.py qembed-qsa003-pg19:/tmp/qembed_context_verify_transaction_probe.py
