@@ -1,7 +1,7 @@
 -- RUST-061b: do not report erasure complete until every targeted data class is absent.
 BEGIN;
 
-CREATE FUNCTION qembed_crypto.erase_caller_data_verified(
+CREATE OR REPLACE FUNCTION qembed_crypto.erase_caller_data_verified(
     p_tenant_id UUID,
     p_caller_id UUID
 )
