@@ -15,6 +15,14 @@ BEGIN
         RETURN FALSE;
     END IF;
 
+    UPDATE tool_executions
+       SET output = NULL,
+           output_expires_at = NULL
+     WHERE tenant_id = p_tenant_id
+       AND caller_id = p_caller_id
+       AND status IN ('Succeeded', 'Failed')
+       AND (output IS NOT NULL OR output_expires_at IS NOT NULL);
+
     IF EXISTS (
         SELECT 1 FROM callers
          WHERE tenant_id = p_tenant_id
