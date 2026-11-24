@@ -132,6 +132,8 @@ SELECT tt.try('QSA-001 worker can call reconciliation discovery','ok',
   $q$SELECT count(*) FROM list_pending_reconciliations(0)$q$);
 SELECT tt.try('QSA-001 worker can call reservation sweeper','ok',
   $q$SELECT sweep_expired_reservations(1)$q$);
+SELECT tt.try('RUST-062 worker cannot bypass the sweep batch limit with NULL','err',
+  $q$SELECT sweep_expired_reservations(NULL)$q$);
 RESET ROLE;
 
 SET ROLE qembed_retention;
