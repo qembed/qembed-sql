@@ -102,7 +102,7 @@ SELECT tt.try('RUST-041d reserve usage for second invocation', 'ok', $q$
      current_setting('app.tenant_id')::uuid,
      '0b000000-0000-0000-0000-000000000001',
      '1a000000-0000-0000-0000-00000000000c',
-     'authenticated',current_date,25,7,'Reserved',now()-interval '1 minute')
+     'authenticated',current_date,25,7,'Reserved','2026-01-02 00:00:00+00')
 $q$);
 SELECT tt.try('RUST-041d cancellation before send is durable', 'ok', $q$
   UPDATE provider_call_attempts
@@ -123,8 +123,12 @@ UPDATE caller_usage_counters SET reserved_tokens=0
    AND usage_date=current_date;
 RESET ROLE;
 SET ROLE qembed_worker;
-SELECT tt.chk('QSA-010 worker sweeper expires drifted reservation without aborting',
-  $q$SELECT sweep_expired_reservations(100)=1$q$);
+SELECT tt.chk('RUST-062 reservation before deterministic cutoff is retained',
+  $q$SELECT sweep_expired_reservations(100, '2026-01-01 00:00:00+00'::timestamptz)=0$q$);
+SELECT tt.chk('RUST-062 worker sweeper expires eligible reservation without aborting on counter drift',
+  $q$SELECT sweep_expired_reservations(100, '2026-01-03 00:00:00+00'::timestamptz)=1$q$);
+SELECT tt.chk('RUST-062 repeated sweep does not release counters twice',
+  $q$SELECT sweep_expired_reservations(100, '2026-01-03 00:00:00+00'::timestamptz)=0$q$);
 RESET ROLE;
 SET ROLE qembed_runtime;
 SELECT tt.chk('RUST-041d pre-send cancellation releases only its reservation',
