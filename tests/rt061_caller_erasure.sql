@@ -1,6 +1,5 @@
 -- RUST-061: restore replay must revoke Callers, cancel in-flight work, and erase
 -- caller-derived content without giving the restore role direct table access.
-set ON_ERROR_STOP on
 
 BEGIN;
 
