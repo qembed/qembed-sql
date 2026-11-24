@@ -240,8 +240,12 @@ access. In-flight invocations/tool executions are cancellation-requested and
 physical erasure remains pending until they reach terminal states.
 
 The dedicated Control-plane database is provisioned separately with
-`migrations/rt061_control_plane_caller_deletion_ledger.sql`. The two migrations
-must not be applied to the same database.
+`migrations/rt061_control_plane_caller_deletion_ledger.sql`, followed by
+`migrations/rt061a_control_plane_tombstone_sequence_lock.sql`. The sequence-lock
+migration ensures every writer acquires the shared advisory lock before
+sequence allocation, so replay high-water snapshots cannot miss a late commit.
+The Control-plane migrations and Runtime migration must not be applied to the
+same database.
 
 `tests/run_rt061_migration_smoke.sh` applies the Runtime migration to a clean
 database and exercises completed-work erasure, in-flight cancellation deferral,
