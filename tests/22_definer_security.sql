@@ -94,7 +94,7 @@ SELECT tt.try('QSA-001 runtime cannot enumerate expired leases across tenants','
 SELECT tt.try('QSA-001 runtime cannot enumerate pending reconciliations across tenants','err',
   $q$SELECT * FROM list_pending_reconciliations(0)$q$);
 SELECT tt.try('QSA-001 runtime cannot sweep cross-tenant reservations','err',
-  $q$SELECT sweep_expired_reservations(0)$q$);
+  $q$SELECT sweep_expired_reservations(1)$q$);
 RESET ROLE;
 
 SET ROLE qembed_admin;
@@ -114,7 +114,7 @@ SELECT tt.chk('QSA-001 worker role is isolated and has only worker entry points'
        AND NOT pg_has_role('qembed_worker','qembed_definer','MEMBER')
        AND has_function_privilege('qembed_worker','public.list_expired_invocation_leases(integer)','EXECUTE')
        AND has_function_privilege('qembed_worker','public.list_pending_reconciliations(integer)','EXECUTE')
-       AND has_function_privilege('qembed_worker','public.sweep_expired_reservations(integer)','EXECUTE')
+       AND has_function_privilege('qembed_worker','public.sweep_expired_reservations(integer,timestamp with time zone)','EXECUTE')
        AND NOT has_function_privilege('qembed_worker','public.retention_purge(text,timestamptz,text)','EXECUTE')
        AND NOT has_function_privilege('qembed_worker','public.authenticate_principal(bytea)','EXECUTE')
        AND NOT has_function_privilege('qembed_worker','public.grant_caller_delegation(uuid)','EXECUTE')
@@ -131,7 +131,7 @@ SELECT tt.try('QSA-001 worker can call expired-lease discovery','ok',
 SELECT tt.try('QSA-001 worker can call reconciliation discovery','ok',
   $q$SELECT count(*) FROM list_pending_reconciliations(0)$q$);
 SELECT tt.try('QSA-001 worker can call reservation sweeper','ok',
-  $q$SELECT sweep_expired_reservations(0)$q$);
+  $q$SELECT sweep_expired_reservations(1)$q$);
 RESET ROLE;
 
 SET ROLE qembed_retention;
@@ -222,11 +222,11 @@ SELECT tt.chk('QSA-001 runtime has only tenant-scoped operational definer entry 
        AND has_function_privilege('qembed_runtime','public.sweep_stale_invocation_deliveries(timestamp with time zone,integer)','EXECUTE')
        AND NOT has_function_privilege('qembed_runtime','public.list_expired_invocation_leases(integer)','EXECUTE')
        AND NOT has_function_privilege('qembed_runtime','public.list_pending_reconciliations(integer)','EXECUTE')
-       AND NOT has_function_privilege('qembed_runtime','public.sweep_expired_reservations(integer)','EXECUTE')
+       AND NOT has_function_privilege('qembed_runtime','public.sweep_expired_reservations(integer,timestamp with time zone)','EXECUTE')
        AND NOT has_function_privilege('qembed_runtime','public.retention_purge(text,timestamptz,text)','EXECUTE')$q$);
 SELECT tt.chk('AUDIT-010 retention has only the purge entry point',
   $q$SELECT has_function_privilege('qembed_retention','public.retention_purge(text,timestamptz,text)','EXECUTE')
-        AND NOT has_function_privilege('qembed_retention','public.sweep_expired_reservations(integer)','EXECUTE')
+        AND NOT has_function_privilege('qembed_retention','public.sweep_expired_reservations(integer,timestamp with time zone)','EXECUTE')
         AND NOT has_function_privilege('qembed_retention','public.list_expired_invocation_leases(integer)','EXECUTE')$q$);
 SELECT tt.chk('AUDIT-010 admin and dispatcher have no SECURITY DEFINER entry points',
   $q$SELECT NOT has_function_privilege('qembed_admin','public.authenticate_principal(bytea)','EXECUTE')
@@ -238,7 +238,7 @@ SELECT tt.chk('AUDIT-010 admin and dispatcher have no SECURITY DEFINER entry poi
         AND NOT has_function_privilege('qembed_dispatcher','public.resolve_delegated_caller(uuid)','EXECUTE')
         AND NOT has_function_privilege('qembed_admin','public.retention_purge(text,timestamptz,text)','EXECUTE')
         AND NOT has_function_privilege('qembed_dispatcher','public.list_pending_reconciliations(integer)','EXECUTE')
-        AND NOT has_function_privilege('qembed_dispatcher','public.sweep_expired_reservations(integer)','EXECUTE')$q$);
+        AND NOT has_function_privilege('qembed_dispatcher','public.sweep_expired_reservations(integer,timestamp with time zone)','EXECUTE')$q$);
 
 SELECT tt.chk('AUDIT-010 definer table grants remain least-privilege',
   $q$SELECT

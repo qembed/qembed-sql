@@ -1769,15 +1769,26 @@ LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $
 $$;
 
 -- Idempotent sweeper (T-40)
-CREATE FUNCTION sweep_expired_reservations(p_limit INT) RETURNS INT
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+CREATE FUNCTION sweep_expired_reservations(
+  p_limit INT,
+  p_now TIMESTAMPTZ DEFAULT clock_timestamp()
+) RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $rust062$
 DECLARE r RECORD; n INT := 0;
 BEGIN
+  IF p_limit < 1 OR p_limit > 500 THEN
+    RAISE EXCEPTION 'reservation sweep batch size must be between 1 and 500'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_now IS NULL THEN
+    RAISE EXCEPTION 'reservation sweep cutoff must not be NULL'
+      USING ERRCODE = '22023';
+  END IF;
   FOR r IN SELECT br.* FROM budget_reservations br
             JOIN provider_call_attempts pca
               ON pca.tenant_id = br.tenant_id AND pca.object_id = br.object_id
              AND pca.invocation_id = br.invocation_id
-            WHERE br.status = 'Reserved' AND br.expires_at < now()
+            WHERE br.status = 'Reserved' AND br.expires_at < p_now
               AND pca.state IN ('NotStarted','ConfirmedNotAccepted','CancelledBeforeSend')
             ORDER BY br.expires_at LIMIT p_limit FOR UPDATE OF pca SKIP LOCKED
   LOOP
@@ -1797,7 +1808,7 @@ BEGIN
     n := n + 1;
   END LOOP;
   RETURN n;
-END $$;
+END $rust062$;
 
 -- PostgreSQL-driven replay for queued invocations whose progress deadline elapsed.
 -- The function is tenant-scoped through the trusted transaction-local app.tenant_id.
@@ -1900,7 +1911,7 @@ DECLARE f TEXT;
 BEGIN
   FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','sync_legacy_owner_principal()','grant_caller_delegation(uuid)','grant_caller_delegation(uuid,uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid,uuid)',
      'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
-     'sweep_expired_reservations(integer)','sweep_stale_invocation_deliveries(timestamp with time zone,integer)',
+     'sweep_expired_reservations(integer,timestamp with time zone)','sweep_stale_invocation_deliveries(timestamp with time zone,integer)',
      'retention_purge(text,timestamptz,text)','knowledge_documents_sync()'] LOOP
     EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
@@ -1942,10 +1953,10 @@ GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation
 
 -- Cross-tenant discovery and global reservation expiry are worker-only.
 REVOKE ALL ON FUNCTION list_expired_invocation_leases(integer),
-  list_pending_reconciliations(integer), sweep_expired_reservations(integer)
+  list_pending_reconciliations(integer), sweep_expired_reservations(integer,timestamp with time zone)
   FROM PUBLIC, qembed_runtime, qembed_dispatcher, qembed_admin, qembed_retention;
 GRANT EXECUTE ON FUNCTION list_expired_invocation_leases(integer),
-  list_pending_reconciliations(integer), sweep_expired_reservations(integer)
+  list_pending_reconciliations(integer), sweep_expired_reservations(integer,timestamp with time zone)
   TO qembed_worker;
 
 -- dispatcher: only the delivery projection; no event log or event_id access.
