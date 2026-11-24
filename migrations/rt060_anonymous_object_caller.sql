@@ -39,6 +39,9 @@ CREATE POLICY object_anonymous_callers_definer_scope
 
 REVOKE ALL ON object_anonymous_callers FROM PUBLIC, qembed_runtime;
 GRANT SELECT, INSERT ON object_anonymous_callers TO qembed_definer;
+-- SECURITY DEFINER routines lock Object and Caller lifecycle rows before returning
+-- the Anonymous Caller; the runtime role receives no direct table access.
+GRANT SELECT ON objects, callers TO qembed_definer;
 GRANT INSERT ON callers TO qembed_definer;
 
 CREATE FUNCTION qembed_crypto.get_or_create_anonymous_caller(
