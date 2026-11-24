@@ -30,11 +30,25 @@ VALUES
   '40000000-0000-0000-0000-000000000002', 'draft');
 
 INSERT INTO object_versions
- (tenant_id, object_id, object_version_id, version_number, status, published_at)
+ (tenant_id, object_id, object_version_id, version_number, status)
 VALUES
  ('10000000-0000-0000-0000-000000000001',
   '40000000-0000-0000-0000-000000000001',
-  '70000000-0000-0000-0000-000000000001', 1, 'published', now());
+  '70000000-0000-0000-0000-000000000001', 1, 'draft');
+
+-- Follow the canonical Object/Version state machine instead of bypassing its
+-- INSERT guard: Draft Object -> Validating -> Active, Draft Version -> Published.
+UPDATE objects
+   SET state = 'validating'
+ WHERE tenant_id = '10000000-0000-0000-0000-000000000001'
+   AND object_id = '40000000-0000-0000-0000-000000000001';
+
+UPDATE object_versions
+   SET status = 'published',
+       published_at = now()
+ WHERE tenant_id = '10000000-0000-0000-0000-000000000001'
+   AND object_id = '40000000-0000-0000-0000-000000000001'
+   AND object_version_id = '70000000-0000-0000-0000-000000000001';
 
 UPDATE objects
    SET state = 'active',
