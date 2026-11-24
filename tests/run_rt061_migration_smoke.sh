@@ -21,6 +21,7 @@ $P -f ../migrations/rt058_principal_delegation_public_invocation.sql
 $P -f ../migrations/rt059_anonymous_context_v2.sql
 $P -f ../migrations/rt060_anonymous_object_caller.sql
 $P -f ../migrations/rt061_runtime_caller_erasure.sql
+$P -f ../migrations/rt061b_verified_caller_erasure.sql
 $P -f ../tests/rt061_caller_erasure.sql
 
 echo "RT-061 Runtime erasure and restore replay smoke passed"
