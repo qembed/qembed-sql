@@ -182,7 +182,7 @@ SELECT tt.chk('AUDIT-010 only isolated allocator can mutate stream counters',
        AND NOT pg_has_role('qembed_dispatcher','qembed_event_allocator','MEMBER')$q$);
 
 SELECT tt.chk('QSA-002 every SECURITY DEFINER function pins pg_temp last',
-  $q$SELECT count(*)=14 AND bool_and(
+  $q$SELECT count(*)=16 AND bool_and(
        proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp'])
        FROM pg_proc p
        WHERE pronamespace='public'::regnamespace AND prosecdef$q$);
@@ -201,7 +201,7 @@ SELECT tt.chk('QSA-002 embedding and published-pointer trigger guards pin pg_tem
           FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='object_published_pointer_guard')$q$);
 
 SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PUBLIC-executable',
-  $q$SELECT count(*)=12 AND bool_and(
+  $q$SELECT count(*)=14 AND bool_and(
        pg_get_userbyid(proowner)='qembed_definer'
        AND prosecdef
        AND proconfig @> ARRAY['search_path=pg_catalog, public, pg_temp']
@@ -211,7 +211,8 @@ SELECT tt.chk('AUDIT-010 SECURITY DEFINER functions are owned, pinned and not PU
          AND proname IN ('authenticate_principal','grant_caller_delegation','revoke_caller_delegation','resolve_delegated_caller','resolve_object_tenant',
                          'list_expired_invocation_leases','list_pending_reconciliations',
                          'sweep_expired_reservations','retention_purge',
-                         'sweep_stale_invocation_deliveries','knowledge_documents_sync')$q$);
+                         'sweep_stale_invocation_deliveries','knowledge_documents_sync',
+                         'release_terminal_invocation_knowledge_pin','collect_retired_knowledge_documents')$q$);
 
 SELECT tt.chk('QSA-001 runtime has only tenant-scoped operational definer entry points',
   $q$SELECT
