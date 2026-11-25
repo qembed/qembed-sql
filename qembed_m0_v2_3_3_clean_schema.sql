@@ -659,6 +659,60 @@ CREATE TABLE knowledge_revision_log (      -- B1: basis for the reproducibility 
   FOREIGN KEY (tenant_id, object_id) REFERENCES objects(tenant_id, object_id)
 );
 
+CREATE TABLE knowledge_revision_pins (
+  tenant_id UUID NOT NULL, object_id UUID NOT NULL, invocation_id UUID NOT NULL,
+  revision BIGINT NOT NULL CHECK (revision > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, object_id, invocation_id),
+  FOREIGN KEY (tenant_id, object_id, invocation_id)
+    REFERENCES object_invocations(tenant_id, object_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, object_id, revision)
+    REFERENCES knowledge_revision_log(tenant_id, object_id, revision)
+);
+CREATE INDEX idx_knowledge_revision_pins_revision
+  ON knowledge_revision_pins (tenant_id, object_id, revision);
+
+CREATE FUNCTION knowledge_revision_pin_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $knowledge_revision_pin_guard$
+DECLARE v_current_revision BIGINT;
+BEGIN
+  SELECT current_revision INTO v_current_revision
+    FROM knowledge_revisions
+   WHERE tenant_id=NEW.tenant_id AND object_id=NEW.object_id
+   FOR SHARE;
+  IF NOT FOUND OR NEW.revision <> v_current_revision THEN
+    RAISE EXCEPTION 'knowledge revision pin must target the current committed revision'
+      USING ERRCODE = '23514';
+  END IF;
+  PERFORM 1 FROM object_invocations
+   WHERE tenant_id=NEW.tenant_id AND object_id=NEW.object_id
+     AND id=NEW.invocation_id AND knowledge_revision=NEW.revision
+     AND status NOT IN ('Completed','CompletedDegraded','Failed','Cancelled')
+   FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'knowledge revision pin must belong to an active matching invocation'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $knowledge_revision_pin_guard$;
+CREATE TRIGGER trg_knowledge_revision_pin_guard
+  BEFORE INSERT ON knowledge_revision_pins
+  FOR EACH ROW EXECUTE FUNCTION knowledge_revision_pin_guard();
+
+CREATE FUNCTION release_terminal_invocation_knowledge_pin() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $release_terminal_invocation_knowledge_pin$
+BEGIN
+  IF NEW.status IN ('Completed','CompletedDegraded','Failed','Cancelled') THEN
+    DELETE FROM knowledge_revision_pins
+     WHERE tenant_id=NEW.tenant_id AND object_id=NEW.object_id AND invocation_id=NEW.id;
+  END IF;
+  RETURN NEW;
+END $release_terminal_invocation_knowledge_pin$;
+CREATE TRIGGER trg_release_terminal_invocation_knowledge_pin
+  AFTER UPDATE OF status ON object_invocations
+  FOR EACH ROW WHEN (NEW.status IN ('Completed','CompletedDegraded','Failed','Cancelled'))
+  EXECUTE FUNCTION release_terminal_invocation_knowledge_pin();
+
 CREATE FUNCTION objects_init_knowledge() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   INSERT INTO knowledge_revisions (tenant_id, object_id) VALUES (NEW.tenant_id, NEW.object_id);
@@ -749,6 +803,56 @@ BEGIN
 END $qsa002_embedding_dim$;
 CREATE TRIGGER trg_kce_dim BEFORE INSERT OR UPDATE OF embedding, model_id
   ON knowledge_chunk_embeddings FOR EACH ROW EXECUTE FUNCTION check_embedding_dim();
+CREATE FUNCTION collect_retired_knowledge_documents(
+  p_tenant_id UUID, p_object_id UUID, p_batch_size INTEGER
+) RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $collect_retired_knowledge_documents$
+DECLARE
+  v_current_revision BIGINT;
+  v_deleted INTEGER;
+  v_context_tenant UUID := qembed_crypto.current_tenant_id();
+BEGIN
+  IF v_context_tenant IS NULL OR v_context_tenant <> p_tenant_id THEN
+    RAISE EXCEPTION 'Knowledge GC tenant differs from verified transaction context'
+      USING ERRCODE = '42501';
+  END IF;
+  IF p_batch_size IS NULL OR p_batch_size < 1 OR p_batch_size > 500 THEN
+    RAISE EXCEPTION 'Knowledge GC batch size must be between 1 and 500'
+      USING ERRCODE = '22023';
+  END IF;
+  SELECT current_revision INTO v_current_revision
+    FROM knowledge_revisions
+   WHERE tenant_id=p_tenant_id AND object_id=p_object_id
+   FOR UPDATE;
+  IF NOT FOUND THEN RETURN 0; END IF;
+
+  WITH eligible AS MATERIALIZED (
+    SELECT document.id FROM knowledge_documents AS document
+     WHERE document.tenant_id=p_tenant_id AND document.object_id=p_object_id
+       AND document.status='retired'
+       AND document.valid_to_revision <= v_current_revision
+       AND NOT EXISTS (
+         SELECT 1 FROM knowledge_revision_pins AS pin
+          WHERE pin.tenant_id=document.tenant_id AND pin.object_id=document.object_id
+            AND pin.revision < document.valid_to_revision
+       )
+     ORDER BY document.valid_to_revision, document.id
+     LIMIT p_batch_size
+     FOR UPDATE OF document SKIP LOCKED
+  ),
+  deleted AS (
+    DELETE FROM knowledge_documents AS document USING eligible
+     WHERE document.tenant_id=p_tenant_id AND document.object_id=p_object_id
+       AND document.id=eligible.id
+    RETURNING 1
+  )
+  SELECT count(*)::integer INTO v_deleted FROM deleted;
+  RETURN v_deleted;
+END
+$collect_retired_knowledge_documents$;
+
 -- HNSW partial expression indexes are created per model by migrator,
 -- CREATE INDEX CONCURRENTLY outside this transaction (see runbook; halfvec for dim > 2000).
 
@@ -1336,7 +1440,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'objects','object_versions','callers','snapshots','object_invocations',
     'invocation_idempotency','interaction_messages','knowledge_revisions','knowledge_revision_log',
-    'knowledge_documents','knowledge_chunks','knowledge_chunk_embeddings',
+    'knowledge_revision_pins','knowledge_documents','knowledge_chunks','knowledge_chunk_embeddings',
     'object_tools','policy_decisions',
     'tool_command_payloads','tool_executions','events','outbox_messages','object_budgets',
     'budget_reservations','provider_call_attempts','usage_counters','caller_usage_counters','budget_event_dedup',
@@ -1473,7 +1577,8 @@ DECLARE t TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY['objects','object_invocations','callers','principal_caller_delegations','budget_reservations',
       'provider_call_attempts','usage_counters','caller_usage_counters','tool_executions','tool_command_payloads',
-      'interaction_messages','memories','invocation_idempotency','outbox_messages','knowledge_chunks'] LOOP
+      'interaction_messages','memories','invocation_idempotency','outbox_messages','knowledge_chunks',
+      'knowledge_revisions','knowledge_documents','knowledge_revision_pins'] LOOP
     EXECUTE format('CREATE POLICY definer_access ON %I TO qembed_definer USING (true) WITH CHECK (true)', t);
   END LOOP;
 END $$;
@@ -1484,6 +1589,7 @@ CREATE POLICY admin_objects ON objects TO qembed_admin USING (true) WITH CHECK (
 -- provisioning failed with 42501 on knowledge_revisions.
 CREATE POLICY admin_knowledge_revisions ON knowledge_revisions FOR SELECT TO qembed_admin USING (true);
 CREATE POLICY admin_knowledge_revisions_ins ON knowledge_revisions FOR INSERT TO qembed_admin WITH CHECK (current_revision = 0);
+CREATE POLICY admin_knowledge_revision_pins ON knowledge_revision_pins FOR SELECT TO qembed_admin USING (true);
 
 -- Reusable catalog assertion: migrations call this before becoming usable,
 -- and regression tests deliberately create an unclassified tenant table to
@@ -1501,7 +1607,7 @@ BEGIN
     FROM unnest(ARRAY[
       'objects','object_versions','callers','principal_caller_delegations',
       'snapshots','object_invocations','invocation_idempotency','interaction_messages',
-      'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
+      'knowledge_revisions','knowledge_revision_log','knowledge_revision_pins','knowledge_documents','knowledge_chunks',
       'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
       'object_tools','policy_decisions','tool_command_payloads','tool_executions',
       'event_stream_counters','events','outbox_messages','outbox_publication_receipts','object_budgets',
@@ -1559,7 +1665,7 @@ BEGIN
        'principals','owner_principals','owner_credentials',
        'objects','object_versions','callers','principal_caller_delegations',
        'snapshots','object_invocations','invocation_idempotency','interaction_messages',
-       'knowledge_revisions','knowledge_revision_log','knowledge_documents','knowledge_chunks',
+       'knowledge_revisions','knowledge_revision_log','knowledge_revision_pins','knowledge_documents','knowledge_chunks',
        'knowledge_chunk_embeddings','memories','memory_conflicts','memory_embeddings',
        'object_tools','policy_decisions','tool_command_payloads','tool_executions',
        'event_stream_counters','events','outbox_messages','outbox_publication_receipts','object_budgets',
@@ -1912,7 +2018,8 @@ BEGIN
   FOREACH f IN ARRAY ARRAY['authenticate_principal(bytea)','sync_legacy_owner_principal()','grant_caller_delegation(uuid)','grant_caller_delegation(uuid,uuid)','revoke_caller_delegation(uuid)','resolve_delegated_caller(uuid)','resolve_object_tenant(uuid,uuid)',
      'list_expired_invocation_leases(integer)','list_pending_reconciliations(integer)',
      'sweep_expired_reservations(integer,timestamp with time zone)','sweep_stale_invocation_deliveries(timestamp with time zone,integer)',
-     'retention_purge(text,timestamptz,text)','knowledge_documents_sync()'] LOOP
+     'retention_purge(text,timestamptz,text)','knowledge_documents_sync()',
+      'release_terminal_invocation_knowledge_pin()','collect_retired_knowledge_documents(uuid,uuid,integer)'] LOOP
     EXECUTE format('ALTER FUNCTION %s OWNER TO qembed_definer', f);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
   END LOOP;
@@ -1940,6 +2047,7 @@ GRANT SELECT, INSERT, UPDATE ON
   tool_command_payloads, tool_executions, object_budgets, budget_reservations,
   provider_call_attempts, usage_counters, caller_usage_counters, budget_event_dedup, object_goals, object_tasks,
   deletion_jobs TO qembed_runtime;
+GRANT SELECT, INSERT ON knowledge_revision_pins TO qembed_runtime;
 GRANT INSERT, SELECT ON knowledge_revision_log, snapshots, policy_decisions, events,
   outbox_messages, deletion_ledger TO qembed_runtime;                   -- append-only/event records: no UPDATE
 GRANT SELECT, INSERT, UPDATE ON event_stream_counters TO qembed_event_allocator;
@@ -1949,7 +2057,8 @@ GRANT DELETE ON object_versions, interaction_messages, memories, memory_embeddin
 GRANT SELECT, INSERT, UPDATE, DELETE ON rate_limit_buckets TO qembed_runtime;
 GRANT EXECUTE ON FUNCTION authenticate_principal(bytea), grant_caller_delegation(uuid), grant_caller_delegation(uuid,uuid),
   revoke_caller_delegation(uuid), resolve_delegated_caller(uuid), resolve_object_tenant(uuid,uuid),
-  sweep_stale_invocation_deliveries(timestamptz,integer) TO qembed_runtime;
+  sweep_stale_invocation_deliveries(timestamptz,integer),
+  collect_retired_knowledge_documents(uuid,uuid,integer) TO qembed_runtime;
 
 -- Cross-tenant discovery and global reservation expiry are worker-only.
 REVOKE ALL ON FUNCTION list_expired_invocation_leases(integer),
@@ -1980,6 +2089,7 @@ GRANT INSERT ON outbox_publication_receipts TO qembed_dispatcher;
 GRANT SELECT, INSERT, UPDATE ON tenants, principals, kill_switches, objects,
   embedding_models, tool_definitions, tool_versions TO qembed_admin;
 GRANT SELECT, INSERT ON knowledge_revisions TO qembed_admin;          -- r3 (R3-06)
+GRANT SELECT ON knowledge_revision_pins TO qembed_admin;
 GRANT SELECT, INSERT ON owner_principals TO qembed_admin;  -- AUDIT-002: provision principals
 GRANT UPDATE (disabled_at) ON owner_principals TO qembed_admin;  -- only lifecycle mutation; identity is immutable
 GRANT SELECT, INSERT, UPDATE ON owner_credentials TO qembed_admin;  -- provision / revoke (guard protects identity/digest; no DELETE)
@@ -1999,6 +2109,9 @@ GRANT SELECT, DELETE ON interaction_messages, memories, invocation_idempotency,
 GRANT UPDATE (heartbeat_at) ON object_invocations TO qembed_definer; -- row lock for replay eligibility
 GRANT UPDATE (replay_requested_at, replay_reason, replay_count)
   ON outbox_messages TO qembed_definer;
+GRANT SELECT, DELETE ON knowledge_revision_pins TO qembed_definer;
+GRANT SELECT, UPDATE ON knowledge_revisions TO qembed_definer;
+GRANT SELECT, UPDATE, DELETE ON knowledge_documents TO qembed_definer;
 GRANT SELECT, UPDATE ON caller_usage_counters TO qembed_definer;   -- r3: sweeper releases per-caller reservations
 GRANT INSERT ON retention_log TO qembed_definer;
 GRANT USAGE, SELECT ON SEQUENCE retention_log_id_seq TO qembed_definer;

@@ -55,6 +55,14 @@ RESET ROLE;
 SET ROLE qembed_runtime;
 SELECT tt.chk('usage_counters reserved released', $q$SELECT reserved_tokens=0 FROM usage_counters$q$);
 SELECT tt.chk('R3-04 caller_usage_counters reserved released', $q$SELECT reserved_tokens=0 FROM caller_usage_counters$q$);
+SELECT tt.chk('RUST-072 runtime can read and insert pins but cannot mutate or delete them',
+ $q$SELECT has_table_privilege('qembed_runtime','knowledge_revision_pins','SELECT')
+       AND has_table_privilege('qembed_runtime','knowledge_revision_pins','INSERT')
+       AND NOT has_table_privilege('qembed_runtime','knowledge_revision_pins','UPDATE')
+       AND NOT has_table_privilege('qembed_runtime','knowledge_revision_pins','DELETE')$q$);
+SELECT tt.chk('RUST-072 runtime can execute tenant-scoped Knowledge GC',
+ $q$SELECT has_function_privilege('qembed_runtime',
+       'public.collect_retired_knowledge_documents(uuid,uuid,integer)','EXECUTE')$q$);
 -- knowledge flow
 SELECT tt.try('doc staged','ok',$q$INSERT INTO knowledge_documents(id,tenant_id,object_id,doc_key,title,status) VALUES ('d0c00000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','faq','FAQ','staged')$q$);
 SELECT tt.try('chunk staged','ok',$q$INSERT INTO knowledge_chunks(id,tenant_id,object_id,document_id,content,position) VALUES ('c4000000-0000-0000-0000-000000000001',current_setting('app.tenant_id')::uuid,'0b000000-0000-0000-0000-000000000001','d0c00000-0000-0000-0000-000000000001','hello',0)$q$);
