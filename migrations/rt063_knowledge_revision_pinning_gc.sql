@@ -172,8 +172,8 @@ BEGIN
     INTO v_definition;
   v_definition := regexp_replace(
     v_definition,
-    $('knowledge_revision_log',[[:space:]]*)('knowledge_documents')$,
-    $\\1'knowledge_revision_pins',\\2$,
+    $rt063_pattern$('knowledge_revision_log',[[:space:]]*)('knowledge_documents')$rt063_pattern$,
+    $rt063_replacement$\1'knowledge_revision_pins',\2$rt063_replacement$,
     'g'
   );
   IF position('knowledge_revision_pins' IN v_definition) = 0 THEN
