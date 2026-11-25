@@ -33,6 +33,7 @@ BEGIN
  'interaction_messages',
  'knowledge_revisions',
  'knowledge_revision_log',
+ 'knowledge_revision_pins',
  'knowledge_documents',
  'knowledge_chunks',
  'knowledge_chunk_embeddings',
