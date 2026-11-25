@@ -170,10 +170,11 @@ DECLARE
 BEGIN
   SELECT pg_get_functiondef('public.assert_tenant_rls_classification()'::regprocedure)
     INTO v_definition;
-  v_definition := replace(
+  v_definition := regexp_replace(
     v_definition,
-    $$'knowledge_revision_log','knowledge_documents'$$,
-    $$'knowledge_revision_log','knowledge_revision_pins','knowledge_documents'$$
+    $('knowledge_revision_log',[[:space:]]*)('knowledge_documents')$,
+    $\\1'knowledge_revision_pins',\\2$,
+    'g'
   );
   IF position('knowledge_revision_pins' IN v_definition) = 0 THEN
     RAISE EXCEPTION 'RT-063 could not extend the tenant RLS audit allowlists';
