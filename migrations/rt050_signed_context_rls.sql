@@ -33,7 +33,6 @@ BEGIN
  'interaction_messages',
  'knowledge_revisions',
  'knowledge_revision_log',
- 'knowledge_revision_pins',
  'knowledge_documents',
  'knowledge_chunks',
  'knowledge_chunk_embeddings',
@@ -59,6 +58,19 @@ BEGIN
   EXECUTE format('ALTER POLICY tenant_isolation ON %I TO qembed_runtime USING (tenant_id = (SELECT qembed_crypto.current_tenant_id())) WITH CHECK (tenant_id = (SELECT qembed_crypto.current_tenant_id()))',t);
  END LOOP;
 END $tenant_policies$;
+
+-- RT-063 may add this table after RT-050 is already installed. Keep clean
+-- installs and incremental upgrades on the same signed-context policy.
+DO $optional_knowledge_revision_pins$
+BEGIN
+ IF to_regclass('public.knowledge_revision_pins') IS NOT NULL THEN
+   ALTER POLICY tenant_isolation ON public.knowledge_revision_pins TO qembed_runtime
+     USING (tenant_id = (SELECT qembed_crypto.current_tenant_id()))
+     WITH CHECK (tenant_id = (SELECT qembed_crypto.current_tenant_id()));
+ END IF;
+END
+$optional_knowledge_revision_pins$;
+
 
 ALTER POLICY tenant_isolation ON memories TO qembed_runtime
  USING (tenant_id = (SELECT qembed_crypto.current_tenant_id())
